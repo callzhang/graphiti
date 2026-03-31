@@ -491,6 +491,9 @@ class EpisodicNode(Node):
 
 class EntityNode(Node):
     name_embedding: list[float] | None = Field(default=None, description='embedding of the name')
+    name_embedding_model: str | None = Field(
+        default=None, description='identifier of the embedder used for name_embedding'
+    )
     summary: str = Field(description='regional summary of surrounding edges', default_factory=str)
     attributes: dict[str, Any] = Field(
         default={}, description='Additional attributes of the node. Dependent on node labels'
@@ -500,6 +503,7 @@ class EntityNode(Node):
         start = time()
         text = self.name.replace('\n', ' ')
         self.name_embedding = await embedder.create(input_data=[text])
+        self.name_embedding_model = _resolve_embedder_model_id(embedder)
         end = time()
         logger.debug(f'embedded entity {self.uuid} name ({len(text)} chars) in {(end - start) * 1000} ms')
 
@@ -545,6 +549,7 @@ class EntityNode(Node):
             'uuid': self.uuid,
             'name': self.name,
             'name_embedding': self.name_embedding,
+            'name_embedding_model': self.name_embedding_model,
             'group_id': self.group_id,
             'summary': self.summary,
             'created_at': self.created_at,
@@ -673,6 +678,9 @@ class EntityNode(Node):
 
 class CommunityNode(Node):
     name_embedding: list[float] | None = Field(default=None, description='embedding of the name')
+    name_embedding_model: str | None = Field(
+        default=None, description='identifier of the embedder used for name_embedding'
+    )
     summary: str = Field(description='region summary of member nodes', default_factory=str)
 
     async def save(self, driver: GraphDriver):
@@ -694,6 +702,7 @@ class CommunityNode(Node):
             group_id=self.group_id,
             summary=self.summary,
             name_embedding=self.name_embedding,
+            name_embedding_model=self.name_embedding_model,
             created_at=self.created_at,
         )
 
@@ -705,6 +714,7 @@ class CommunityNode(Node):
         start = time()
         text = self.name.replace('\n', ' ')
         self.name_embedding = await embedder.create(input_data=[text])
+        self.name_embedding_model = _resolve_embedder_model_id(embedder)
         end = time()
         logger.debug(f'embedded entity {self.uuid} name ({len(text)} chars) in {(end - start) * 1000} ms')
 
@@ -1018,10 +1028,12 @@ def get_episodic_node_from_record(record: Any) -> EpisodicNode:
 
 
 def get_entity_node_from_record(record: Any, provider: GraphProvider) -> EntityNode:
+    name_embedding_model = record.get('name_embedding_model')
     if provider == GraphProvider.KUZU:
         attributes = json.loads(record['attributes']) if record['attributes'] else {}
     else:
         attributes = record['attributes']
+        name_embedding_model = name_embedding_model or attributes.pop('name_embedding_model', None)
         attributes.pop('uuid', None)
         attributes.pop('name', None)
         attributes.pop('group_id', None)
@@ -1039,6 +1051,7 @@ def get_entity_node_from_record(record: Any, provider: GraphProvider) -> EntityN
         uuid=record['uuid'],
         name=record['name'],
         name_embedding=record.get('name_embedding'),
+        name_embedding_model=name_embedding_model,
         group_id=group_id,
         labels=labels,
         created_at=parse_db_date(record['created_at']),  # type: ignore
@@ -1055,6 +1068,7 @@ def get_community_node_from_record(record: Any) -> CommunityNode:
         name=record['name'],
         group_id=record['group_id'],
         name_embedding=record['name_embedding'],
+        name_embedding_model=record.get('name_embedding_model'),
         created_at=parse_db_date(record['created_at']),  # type: ignore
         summary=record['summary'],
     )
@@ -1077,5 +1091,23 @@ async def create_entity_node_embeddings(embedder: EmbedderClient, nodes: list[En
         return
 
     name_embeddings = await embedder.create_batch([node.name for node in filtered_nodes])
+    model_id = _resolve_embedder_model_id(embedder)
     for node, name_embedding in zip(filtered_nodes, name_embeddings, strict=True):
         node.name_embedding = name_embedding
+        node.name_embedding_model = model_id
+
+
+def _resolve_embedder_model_id(embedder: EmbedderClient) -> str | None:
+    explicit = getattr(embedder, 'embedding_model_id', None)
+    if explicit:
+        return str(explicit)
+    config = getattr(embedder, 'config', None)
+    if config is None:
+        return None
+    model = getattr(config, 'embedding_model', None) or getattr(config, 'model', None)
+    dim = getattr(config, 'embedding_dim', None)
+    if model and dim:
+        return f'{model}:{dim}'
+    if model:
+        return str(model)
+    return None

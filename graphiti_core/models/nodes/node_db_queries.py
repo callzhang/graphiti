@@ -156,6 +156,7 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
                     n.labels = $labels,
                     n.created_at = $created_at,
                     n.name_embedding = $name_embedding,
+                    n.name_embedding_model = $name_embedding_model,
                     n.summary = $summary,
                     n.attributes = $attributes
                 WITH n
@@ -174,7 +175,20 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
             """
         case _:
             save_embedding_query = (
-                'WITH n CALL db.create.setNodeVectorProperty(n, "name_embedding", $entity_data.name_embedding)'
+                """
+                CALL {
+                    WITH n, $entity_data AS entity_data
+                    WITH n, entity_data
+                    WHERE entity_data.name_embedding IS NOT NULL
+                    CALL db.create.setNodeVectorProperty(n, "name_embedding", entity_data.name_embedding)
+                    RETURN 1 AS ignored
+                    UNION
+                    WITH n, entity_data
+                    WITH n, entity_data
+                    WHERE entity_data.name_embedding IS NULL
+                    RETURN 1 AS ignored
+                }
+                """
                 if not has_aoss
                 else ''
             )
@@ -243,13 +257,27 @@ def get_entity_node_save_bulk_query(
                     n.labels = $labels,
                     n.created_at = $created_at,
                     n.name_embedding = $name_embedding,
+                    n.name_embedding_model = $name_embedding_model,
                     n.summary = $summary,
                     n.attributes = $attributes
                 RETURN n.uuid AS uuid
             """
         case _:  # Neo4j
             save_embedding_query = (
-                'WITH n, node CALL db.create.setNodeVectorProperty(n, "name_embedding", node.name_embedding)'
+                """
+                CALL {
+                    WITH n, node
+                    WITH n, node
+                    WHERE node.name_embedding IS NOT NULL
+                    CALL db.create.setNodeVectorProperty(n, "name_embedding", node.name_embedding)
+                    RETURN 1 AS ignored
+                    UNION
+                    WITH n, node
+                    WITH n, node
+                    WHERE node.name_embedding IS NULL
+                    RETURN 1 AS ignored
+                }
+                """
                 if not has_aoss
                 else ''
             )
@@ -276,6 +304,7 @@ def get_entity_node_return_query(provider: GraphProvider) -> str:
             n.group_id AS group_id,
             n.labels AS labels,
             n.created_at AS created_at,
+            n.name_embedding_model AS name_embedding_model,
             n.summary AS summary,
             n.attributes AS attributes
         """
@@ -285,6 +314,7 @@ def get_entity_node_return_query(provider: GraphProvider) -> str:
         n.name AS name,
         n.group_id AS group_id,
         n.created_at AS created_at,
+        n.name_embedding_model AS name_embedding_model,
         n.summary AS summary,
         labels(n) AS labels,
         properties(n) AS attributes
@@ -296,13 +326,13 @@ def get_community_node_save_query(provider: GraphProvider) -> str:
         case GraphProvider.FALKORDB:
             return """
                 MERGE (n:Community {uuid: $uuid})
-                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at, name_embedding: vecf32($name_embedding)}
+                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at, name_embedding_model: $name_embedding_model, name_embedding: vecf32($name_embedding)}
                 RETURN n.uuid AS uuid
             """
         case GraphProvider.NEPTUNE:
             return """
                 MERGE (n:Community {uuid: $uuid})
-                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at}
+                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at, name_embedding_model: $name_embedding_model}
                 SET n.name_embedding = join([x IN coalesce($name_embedding, []) | toString(x) ], ",")
                 RETURN n.uuid AS uuid
             """
@@ -314,13 +344,14 @@ def get_community_node_save_query(provider: GraphProvider) -> str:
                     n.group_id = $group_id,
                     n.created_at = $created_at,
                     n.name_embedding = $name_embedding,
+                    n.name_embedding_model = $name_embedding_model,
                     n.summary = $summary
                 RETURN n.uuid AS uuid
             """
         case _:  # Neo4j
             return """
                 MERGE (n:Community {uuid: $uuid})
-                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at}
+                SET n = {uuid: $uuid, name: $name, group_id: $group_id, summary: $summary, created_at: $created_at, name_embedding_model: $name_embedding_model}
                 WITH n CALL db.create.setNodeVectorProperty(n, "name_embedding", $name_embedding)
                 RETURN n.uuid AS uuid
             """
@@ -332,6 +363,7 @@ COMMUNITY_NODE_RETURN = """
     c.group_id AS group_id,
     c.created_at AS created_at,
     c.name_embedding AS name_embedding,
+    c.name_embedding_model AS name_embedding_model,
     c.summary AS summary
 """
 
@@ -339,6 +371,7 @@ COMMUNITY_NODE_RETURN_NEPTUNE = """
     n.uuid AS uuid,
     n.name AS name,
     [x IN split(n.name_embedding, ",") | toFloat(x)] AS name_embedding,
+    n.name_embedding_model AS name_embedding_model,
     n.group_id AS group_id,
     n.summary AS summary,
     n.created_at AS created_at

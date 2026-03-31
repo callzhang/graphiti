@@ -264,6 +264,9 @@ class EntityEdge(Edge):
     name: str = Field(description='name of the edge, relation name')
     fact: str = Field(description='fact representing the edge and nodes that it connects')
     fact_embedding: list[float] | None = Field(default=None, description='embedding of the fact')
+    fact_embedding_model: str | None = Field(
+        default=None, description='identifier of the embedder used for fact_embedding'
+    )
     episodes: list[str] = Field(
         default=[],
         description='list of episode ids that reference these entity edges',
@@ -286,6 +289,7 @@ class EntityEdge(Edge):
 
         text = self.fact.replace('\n', ' ')
         self.fact_embedding = await embedder.create(input_data=[text])
+        self.fact_embedding_model = _resolve_embedder_model_id(embedder)
 
         end = time()
         logger.debug(f'embedded edge {self.uuid} fact ({len(text)} chars) in {(end - start) * 1000} ms')
@@ -342,6 +346,7 @@ class EntityEdge(Edge):
             'group_id': self.group_id,
             'fact': self.fact,
             'fact_embedding': self.fact_embedding,
+            'fact_embedding_model': self.fact_embedding_model,
             'episodes': self.episodes,
             'created_at': self.created_at,
             'expired_at': self.expired_at,
@@ -959,10 +964,12 @@ def get_episodic_edge_from_record(record: Any) -> EpisodicEdge:
 
 def get_entity_edge_from_record(record: Any, provider: GraphProvider) -> EntityEdge:
     episodes = record['episodes']
+    fact_embedding_model = record.get('fact_embedding_model')
     if provider == GraphProvider.KUZU:
         attributes = json.loads(record['attributes']) if record['attributes'] else {}
     else:
         attributes = record['attributes']
+        fact_embedding_model = fact_embedding_model or attributes.pop('fact_embedding_model', None)
         attributes.pop('uuid', None)
         attributes.pop('source_node_uuid', None)
         attributes.pop('target_node_uuid', None)
@@ -982,6 +989,7 @@ def get_entity_edge_from_record(record: Any, provider: GraphProvider) -> EntityE
         target_node_uuid=record['target_node_uuid'],
         fact=record['fact'],
         fact_embedding=record.get('fact_embedding'),
+        fact_embedding_model=fact_embedding_model,
         name=record['name'],
         group_id=record['group_id'],
         episodes=episodes,
@@ -1032,5 +1040,23 @@ async def create_entity_edge_embeddings(embedder: EmbedderClient, edges: list[En
     if len(filtered_edges) == 0:
         return
     fact_embeddings = await embedder.create_batch([edge.fact for edge in filtered_edges])
+    model_id = _resolve_embedder_model_id(embedder)
     for edge, fact_embedding in zip(filtered_edges, fact_embeddings, strict=True):
         edge.fact_embedding = fact_embedding
+        edge.fact_embedding_model = model_id
+
+
+def _resolve_embedder_model_id(embedder: EmbedderClient) -> str | None:
+    explicit = getattr(embedder, 'embedding_model_id', None)
+    if explicit:
+        return str(explicit)
+    config = getattr(embedder, 'config', None)
+    if config is None:
+        return None
+    model = getattr(config, 'embedding_model', None) or getattr(config, 'model', None)
+    dim = getattr(config, 'embedding_dim', None)
+    if model and dim:
+        return f'{model}:{dim}'
+    if model:
+        return str(model)
+    return None
