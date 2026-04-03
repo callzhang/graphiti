@@ -54,6 +54,24 @@ CHUNK_MIN_TOKENS = int(os.getenv('CHUNK_MIN_TOKENS', 1000))
 # Examples that DON'T chunk at 0.15: meeting transcripts, news articles, documentation
 CHUNK_DENSITY_THRESHOLD = float(os.getenv('CHUNK_DENSITY_THRESHOLD', 0.15))
 
+# Post-extraction caps: limit entities and edges after LLM extraction to prevent
+# runaway resolution costs.  Formula: max(floor, min(content_chars // density, ceiling)).
+# Short messages (~200 chars) → floor;  long docs (~5000 chars) → ~25-33;  very long → ceiling.
+ENTITY_CAP_DENSITY = int(os.getenv('ENTITY_CAP_DENSITY', 200))
+ENTITY_CAP_FLOOR = int(os.getenv('ENTITY_CAP_FLOOR', 8))
+ENTITY_CAP_CEILING = int(os.getenv('ENTITY_CAP_CEILING', 40))
+EDGE_CAP_DENSITY = int(os.getenv('EDGE_CAP_DENSITY', 150))
+EDGE_CAP_FLOOR = int(os.getenv('EDGE_CAP_FLOOR', 10))
+EDGE_CAP_CEILING = int(os.getenv('EDGE_CAP_CEILING', 50))
+
+
+def compute_entity_cap(content_chars: int) -> int:
+    return max(ENTITY_CAP_FLOOR, min(content_chars // ENTITY_CAP_DENSITY, ENTITY_CAP_CEILING))
+
+
+def compute_edge_cap(content_chars: int) -> int:
+    return max(EDGE_CAP_FLOOR, min(content_chars // EDGE_CAP_DENSITY, EDGE_CAP_CEILING))
+
 
 def parse_db_date(input_date: neo4j_time.DateTime | str | None) -> datetime | None:
     if isinstance(input_date, neo4j_time.DateTime):

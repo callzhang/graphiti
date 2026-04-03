@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from graphiti_core.edges import EntityEdge
 from graphiti_core.graphiti_types import GraphitiClients
-from graphiti_core.helpers import semaphore_gather
+from graphiti_core.helpers import compute_entity_cap, semaphore_gather
 from graphiti_core.llm_client import LLMClient
 from graphiti_core.llm_client.config import ModelSize
 from graphiti_core.nodes import (
@@ -90,6 +90,17 @@ async def extract_nodes(
 
     # Filter empty names
     filtered_entities = [e for e in extracted_entities if e.name.strip()]
+
+    # Cap extracted entities to prevent runaway resolution costs
+    max_entities = compute_entity_cap(len(episode.content or ''))
+    if len(filtered_entities) > max_entities:
+        logger.info(
+            'Capping extracted entities from %d to %d (content_chars=%d)',
+            len(filtered_entities),
+            max_entities,
+            len(episode.content or ''),
+        )
+        filtered_entities = filtered_entities[:max_entities]
 
     end = time()
     logger.debug(f'Extracted {len(filtered_entities)} entities in {(end - start) * 1000:.0f} ms')
@@ -405,11 +416,13 @@ async def resolve_extracted_nodes(
 ) -> tuple[list[EntityNode], dict[str, str], list[tuple[EntityNode, EntityNode]]]:
     """Search for existing nodes, resolve deterministic matches, then escalate holdouts to the LLM dedupe prompt."""
     llm_client = clients.llm_client
+    search_started = time()
     existing_nodes = await _collect_candidate_nodes(
         clients,
         extracted_nodes,
         existing_nodes_override,
     )
+    search_done = time()
 
     indexes: DedupCandidateIndexes = _build_candidate_indexes(existing_nodes)
 
@@ -421,6 +434,7 @@ async def resolve_extracted_nodes(
 
     _resolve_with_similarity(extracted_nodes, indexes, state)
 
+    llm_started = time()
     await _resolve_with_llm(
         llm_client,
         extracted_nodes,
@@ -430,6 +444,7 @@ async def resolve_extracted_nodes(
         previous_episodes,
         entity_types,
     )
+    llm_done = time()
 
     for idx, node in enumerate(extracted_nodes):
         if state.resolved_nodes[idx] is None:
@@ -439,6 +454,14 @@ async def resolve_extracted_nodes(
     logger.debug(
         'Resolved nodes: %s',
         [node.uuid for node in state.resolved_nodes if node is not None],
+    )
+    logger.info(
+        'resolve_extracted_nodes phases extracted=%d candidate_count=%d unresolved=%d search_ms=%.1f llm_ms=%.1f',
+        len(extracted_nodes),
+        len(existing_nodes),
+        len(state.unresolved_indices),
+        (search_done - search_started) * 1000,
+        (llm_done - llm_started) * 1000,
     )
 
     return (
