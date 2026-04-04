@@ -93,6 +93,10 @@ def resolve_edge(context: dict[str, Any]) -> list[Message]:
         Guidelines:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
+        2. If a NEW FACT updates the same attribute of the same entity with a DIFFERENT value
+           (e.g., a target changed from 60万 to 100万, or a person in charge changed from Kevin to Derek),
+           the old fact IS CONTRADICTED by the new fact — mark the old fact idx in contradicted_facts.
+           This applies even if both facts are true at different times: the newer one supersedes the older one.
 
         <EXISTING FACTS>
         {context['existing_edges']}
@@ -157,6 +161,10 @@ FACT INVALIDATION CANDIDATES:
         Guidelines:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
+        2. If a NEW FACT updates the same attribute of the same entity with a DIFFERENT value
+           (e.g., a target changed from 60万 to 100万, or a person in charge changed from Kevin to Derek),
+           the old fact IS CONTRADICTED by the new fact — mark the old fact idx in contradicted_facts.
+           This applies even if both facts are true at different times: the newer one supersedes the older one.
 
         {edges_block}
         """,

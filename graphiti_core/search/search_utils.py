@@ -214,6 +214,9 @@ async def edge_fulltext_search(
         search_filter, driver.provider
     )
 
+    # Exclude expired/invalidated edges from fulltext results
+    filter_queries.append('e.expired_at IS NULL')
+
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -330,6 +333,10 @@ async def edge_similarity_search(
     filter_queries, filter_params = edge_search_filter_query_constructor(
         search_filter, driver.provider
     )
+
+    # Exclude expired/invalidated edges — temporal KG keeps them for history
+    # but search should only return currently-valid facts.
+    filter_queries.append('e.expired_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -468,6 +475,9 @@ async def edge_bfs_search(
     filter_queries, filter_params = edge_search_filter_query_constructor(
         search_filter, driver.provider
     )
+
+    # Exclude expired/invalidated edges from BFS traversal
+    filter_queries.append('e.expired_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
