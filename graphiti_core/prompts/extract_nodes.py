@@ -109,10 +109,15 @@ reference entities. Only extract distinct entities from the CURRENT MESSAGE. Don
 
 4. **Exclusions**:
    - Do NOT extract entities representing relationships or actions.
-   - Do NOT extract dates, times, or other temporal information—these will be handled separately.
+   - Do NOT extract standalone dates, times, or other temporal information—these will be handled separately.
 
 5. **Formatting**:
    - Be **explicit and unambiguous** in naming entities (e.g., use full names when available).
+
+6. **Mutable Business Concepts**: Extract abstract objects whose values change over time as entities:
+   - Targets/Goals (e.g., "Q1 签约目标"), Budgets (e.g., "项目预算"), Strategies (e.g., "缓存方案"),
+     Risks (e.g., "采购审批风险"), Statuses (e.g., "项目状态"), Policies (e.g., "写作规范", "机构口径").
+   - This allows edges to track changing values with timestamps (e.g., Project Atlas → Q1目标: 100万).
 
 {context['custom_extraction_instructions']}
 """
@@ -177,8 +182,16 @@ Indicate the classified entity type by providing its entity_type_id.
 Guidelines:
 1. Extract significant entities, concepts, or actors mentioned in the conversation.
 2. Avoid creating nodes for relationships or actions.
-3. Avoid creating nodes for temporal information like dates, times or years (these will be added to edges later).
+3. Avoid creating nodes for standalone temporal information like dates, times or years (these will be added to edges later).
 4. Be as explicit as possible in your node names, using full names and avoiding abbreviations.
+5. **IMPORTANT: Extract mutable business concepts as entities** — these are abstract objects whose values change over time. Examples:
+   - Targets/Goals: "Q1 签约目标", "年度预算", "OKR 目标"
+   - Statuses/Phases: "项目状态", "审批进度", "上线阶段"
+   - Strategies/Approaches: "缓存方案", "定价策略", "技术选型"
+   - Risks/Constraints: "采购审批风险", "合规约束"
+   - Budgets: "项目预算", "营销费用"
+   - Policies/Rules: "写作规范", "机构口径", "审批流程"
+   When a text says "目标上调到100万" or "方案从Redis改为Memcached", the target/approach MUST be extracted as an entity so that edges can track the changing values with timestamps.
 """
     return [
         Message(role='system', content=sys_prompt),
