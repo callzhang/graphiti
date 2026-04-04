@@ -118,6 +118,7 @@ You may use information from the PREVIOUS MESSAGES only to disambiguate referenc
 4. The `fact` should closely paraphrase the original source sentence(s). Do not verbatim quote the original text.
 5. Use `REFERENCE_TIME` to resolve vague or relative temporal expressions (e.g., "last week").
 6. Do **not** hallucinate or infer temporal bounds from unrelated events.
+7. **Numeric and personnel changes are HIGH-PRIORITY facts** — even if they appear as a brief aside in a longer text. When the text mentions a target/goal/budget changing (e.g., "目标上调到100万"), a person being replaced (e.g., "Kevin换Derek来跟"), or a status update, you MUST extract these as separate edges with the specific numbers and names. Never omit a numeric value change.
 
 # RELATION TYPE RULES
 
