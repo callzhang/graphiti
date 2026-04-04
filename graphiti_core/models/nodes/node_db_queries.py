@@ -177,7 +177,7 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
             save_embedding_query = (
                 """
                 CALL {
-                    WITH n, $entity_data AS entity_data
+                    WITH n, entity_data
                     WITH n, entity_data
                     WHERE entity_data.name_embedding IS NOT NULL
                     CALL db.create.setNodeVectorProperty(n, "name_embedding", entity_data.name_embedding)
@@ -197,6 +197,7 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
                 MERGE (n:Entity {{uuid: $entity_data.uuid}})
                 SET n:{labels}
                 SET n = $entity_data
+                WITH n, $entity_data AS entity_data
                 """
                 + save_embedding_query
                 + """
@@ -287,6 +288,7 @@ def get_entity_node_save_bulk_query(
                     MERGE (n:Entity {uuid: node.uuid})
                     SET n:$(node.labels)
                     SET n = node
+                    WITH n, node
                     """
                 + save_embedding_query
                 + """
