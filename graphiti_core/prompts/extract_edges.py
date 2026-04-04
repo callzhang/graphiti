@@ -133,6 +133,21 @@ You may use information from the PREVIOUS MESSAGES only to disambiguate referenc
 - Leave both fields `null` if no explicit or resolvable time is stated.
 - If only a date is mentioned (no time), assume 00:00:00.
 - If only a year is mentioned, use January 1st at 00:00:00.
+
+# STATE FACT SEMANTICS
+
+Some facts represent **mutable state** — only one value is valid at a time:
+- Targets/goals (e.g., "Q1 target is 60万" → later "target raised to 100万")
+- Ownership/leadership (e.g., "Kevin leads Atlas" → later "Derek took over")
+- Decisions/strategies (e.g., "using Redis" → "switched to Memcached")
+- Status/phase (e.g., "in progress" → "completed")
+
+When extracting a state fact that UPDATES a previous value:
+1. Set `valid_at` to REFERENCE_TIME (the new value starts now)
+2. Set `invalid_at` on the old value if the text explicitly says it ended
+3. Use a `relation_type` that clearly signals the state category:
+   prefer HAS_TARGET, HAS_GOAL, IS_LED_BY, HAS_STATUS, USES_STRATEGY
+   over generic names like REPORTS_PROGRESS_FOR or UPDATES
         """,
         ),
     ]

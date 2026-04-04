@@ -93,10 +93,13 @@ def resolve_edge(context: dict[str, Any]) -> list[Message]:
         Guidelines:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
-        2. If a NEW FACT updates the same attribute of the same entity with a DIFFERENT value
-           (e.g., a target changed from 60万 to 100万, or a person in charge changed from Kevin to Derek),
-           the old fact IS CONTRADICTED by the new fact — mark the old fact idx in contradicted_facts.
-           This applies even if both facts are true at different times: the newer one supersedes the older one.
+        2. **State facts are unique per entity at any point in time.**
+           Facts about targets, goals, ownership, leadership, status, decisions, or strategies
+           represent mutable state — only the latest value is valid.
+           If the NEW FACT updates the same entity's state (e.g., target 60万→100万,
+           owner Kevin→Derek, status "in progress"→"completed"), mark ALL older
+           versions in EXISTING FACTS as contradicted, even if their wording differs.
+           This applies regardless of whether they use the same relation type name.
 
         <EXISTING FACTS>
         {context['existing_edges']}
@@ -161,10 +164,12 @@ FACT INVALIDATION CANDIDATES:
         Guidelines:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
-        2. If a NEW FACT updates the same attribute of the same entity with a DIFFERENT value
-           (e.g., a target changed from 60万 to 100万, or a person in charge changed from Kevin to Derek),
-           the old fact IS CONTRADICTED by the new fact — mark the old fact idx in contradicted_facts.
-           This applies even if both facts are true at different times: the newer one supersedes the older one.
+        2. **State facts are unique per entity at any point in time.**
+           Facts about targets, goals, ownership, leadership, status, decisions, or strategies
+           represent mutable state — only the latest value is valid.
+           If the NEW FACT updates the same entity's state (e.g., target 60万→100万,
+           owner Kevin→Derek, status "in progress"→"completed"), mark ALL older
+           versions as contradicted, even if their wording or relation type differs.
 
         {edges_block}
         """,
