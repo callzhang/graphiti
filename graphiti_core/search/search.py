@@ -15,7 +15,9 @@ limitations under the License.
 """
 
 import logging
+import math
 from collections import defaultdict
+from datetime import datetime, timezone
 from time import time
 
 from graphiti_core.cross_encoder.client import CrossEncoderClient
@@ -63,6 +65,41 @@ from graphiti_core.search.search_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Recency-weighted reranking
+# ---------------------------------------------------------------------------
+RECENCY_HALF_LIFE_DAYS = 90.0
+
+
+def _recency_weight(ts: datetime | None, *, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> float:
+    """Return a multiplicative weight in (0, 1] that decays with age.
+
+    Fresh items get weight ~1.0; items ``half_life_days`` old get ~0.5.
+    """
+    if ts is None:
+        return 0.5  # neutral when timestamp unknown
+    now = datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age_days = max(0.0, (now - ts).total_seconds() / 86_400)
+    return 1.0 / (1.0 + age_days / half_life_days)
+
+
+def _rerank_edges_with_recency(
+    edges: list[EntityEdge],
+    scores: list[float],
+) -> tuple[list[EntityEdge], list[float]]:
+    """Re-sort edges by ``score * recency_weight`` so recent facts rank higher."""
+    if not edges:
+        return edges, scores
+    pairs = []
+    for edge, score in zip(edges, scores):
+        ts = getattr(edge, 'created_at', None) or getattr(edge, 'valid_at', None)
+        weighted = score * _recency_weight(ts)
+        pairs.append((weighted, edge))
+    pairs.sort(key=lambda p: p[0], reverse=True)
+    return [p[1] for p in pairs], [p[0] for p in pairs]
 
 
 async def search(
@@ -303,6 +340,12 @@ async def edge_search(
 
     if config.reranker == EdgeReranker.episode_mentions:
         reranked_edges.sort(reverse=True, key=lambda edge: len(edge.episodes))
+
+    # Apply recency-weighted reranking so recent facts outrank older
+    # high-frequency duplicates (fixes noisy_graph_precision).
+    reranked_edges, edge_scores = _rerank_edges_with_recency(
+        reranked_edges[:2 * limit], edge_scores[:2 * limit]
+    )
 
     return reranked_edges[:limit], edge_scores[:limit]
 
