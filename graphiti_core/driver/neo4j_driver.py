@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
@@ -74,6 +75,9 @@ class Neo4jDriver(GraphDriver):
             auth=(user or '', password or ''),
         )
         self._database = database
+        self._close_lock = asyncio.Lock()
+        self._closed = False
+        self._index_init_task: asyncio.Task[Any] | None = None
 
         # Instantiate Neo4j operations
         self._entity_node_ops = Neo4jEntityNodeOperations()
@@ -89,13 +93,11 @@ class Neo4jDriver(GraphDriver):
         self._graph_ops = Neo4jGraphMaintenanceOperations()
 
         # Schedule the indices and constraints to be built
-        import asyncio
-
         try:
             # Try to get the current event loop
             loop = asyncio.get_running_loop()
             # Schedule the build_indices_and_constraints to run
-            loop.create_task(self.build_indices_and_constraints())
+            self._index_init_task = loop.create_task(self.build_indices_and_constraints())
         except RuntimeError:
             # No event loop running, this will be handled later
             pass
@@ -181,7 +183,29 @@ class Neo4jDriver(GraphDriver):
         return self.client.session(database=_database)  # type: ignore
 
     async def close(self) -> None:
-        return await self.client.close()
+        async with self._close_lock:
+            if self._closed:
+                return None
+
+            init_task = self._index_init_task
+            if init_task is not None:
+                self._index_init_task = None
+                if not init_task.done():
+                    init_task.cancel()
+                if init_task is not asyncio.current_task():
+                    await asyncio.gather(init_task, return_exceptions=True)
+
+            try:
+                await self.client.close()
+            except BufferError as exc:
+                if 'Existing exports of data: object cannot be re-sized' not in str(exc):
+                    raise
+                logger.warning(
+                    'Ignoring known neo4j async driver BufferError during close; shutdown will continue'
+                )
+
+            self._closed = True
+            return None
 
     def delete_all_indexes(self) -> Coroutine:
         return self.client.execute_query(
