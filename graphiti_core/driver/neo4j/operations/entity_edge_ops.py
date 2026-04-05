@@ -39,6 +39,9 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
         edge: EntityEdge,
         tx: Transaction | None = None,
     ) -> None:
+        # episodes must be stored as comma-separated string for Neo4j —
+        # split() in search queries expects string, not StringArray[].
+        episodes_str = ','.join(edge.episodes) if isinstance(edge.episodes, list) else (edge.episodes or '')
         edge_data: dict[str, Any] = {
             'uuid': edge.uuid,
             'source_uuid': edge.source_node_uuid,
@@ -47,7 +50,7 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
             'fact': edge.fact,
             'fact_embedding': edge.fact_embedding,
             'group_id': edge.group_id,
-            'episodes': edge.episodes,
+            'episodes': episodes_str,
             'created_at': edge.created_at,
             'expired_at': edge.expired_at,
             'valid_at': edge.valid_at,
@@ -72,6 +75,7 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
     ) -> None:
         prepared: list[dict[str, Any]] = []
         for edge in edges:
+            episodes_str = ','.join(edge.episodes) if isinstance(edge.episodes, list) else (edge.episodes or '')
             edge_data: dict[str, Any] = {
                 'uuid': edge.uuid,
                 'source_node_uuid': edge.source_node_uuid,
@@ -80,7 +84,7 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
                 'fact': edge.fact,
                 'fact_embedding': edge.fact_embedding,
                 'group_id': edge.group_id,
-                'episodes': edge.episodes,
+                'episodes': episodes_str,
                 'created_at': edge.created_at,
                 'expired_at': edge.expired_at,
                 'valid_at': edge.valid_at,
