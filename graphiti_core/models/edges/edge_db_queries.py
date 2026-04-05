@@ -198,7 +198,7 @@ def get_entity_edge_return_query(provider: GraphProvider) -> str:
         e.name AS name,
         e.fact AS fact,
         e.fact_embedding_model AS fact_embedding_model,
-        split(coalesce(e.episodes, ''), ',') AS episodes,
+        CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
         e.created_at AS created_at,
         e.expired_at AS expired_at,
         e.valid_at AS valid_at,
