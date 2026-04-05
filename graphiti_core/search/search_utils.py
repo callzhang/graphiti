@@ -493,6 +493,79 @@ async def edge_similarity_search(
     return edges
 
 
+async def entity_anchored_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[EntityEdge]:
+    """Vector search on entity nodes → graph traversal to their edges.
+
+    This combines vector similarity (find relevant entities) with graph
+    structure (traverse to their relationships) in a single Cypher query.
+    NumPy cannot do this — it requires the DB to join vector index results
+    with graph topology natively.
+
+    Complements pure edge-fact vector search: when the query names an entity
+    ("Atlas 的目标"), this path finds edges anchored to that entity even if
+    the edge fact text doesn't match the query vector well.
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []  # Only Neo4j supports native vector index + graph traversal
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_parts = ['e.expired_at IS NULL']
+    filter_params: dict[str, Any] = {}
+    if group_ids is not None:
+        filter_parts.append('entity.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    # Add search filter conditions
+    edge_filter_queries, edge_filter_params = edge_search_filter_query_constructor(
+        search_filter, driver.provider
+    )
+    filter_parts.extend(edge_filter_queries)
+    filter_params.update(edge_filter_params)
+
+    where_clause = ' AND '.join(filter_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS entity, score AS entity_score
+        MATCH (entity)-[e:RELATES_TO]-(related:Entity)
+        WHERE {where_clause}
+          AND entity_score > $min_score
+        RETURN
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            entity.uuid AS source_node_uuid,
+            related.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            split(e.episodes, ",") AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes
+        ORDER BY entity_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
 async def edge_bfs_search(
     driver: GraphDriver,
     bfs_origin_node_uuids: list[str] | None,

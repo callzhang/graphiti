@@ -51,6 +51,7 @@ from graphiti_core.search.search_utils import (
     edge_bfs_search,
     edge_fulltext_search,
     edge_similarity_search,
+    entity_anchored_edge_search,
     episode_fulltext_search,
     episode_mentions_reranker,
     get_embeddings_for_communities,
@@ -265,6 +266,19 @@ async def edge_search(
                 search_filter,
                 group_ids,
                 2 * limit,
+            )
+        )
+    # Entity-anchored search: vector match on entity nodes → graph traverse to edges.
+    # Runs alongside other methods; results fused via RRF.
+    if EdgeSearchMethod.cosine_similarity in config.search_methods:
+        search_tasks.append(
+            entity_anchored_edge_search(
+                driver,
+                query_vector,
+                search_filter,
+                group_ids,
+                2 * limit,
+                config.sim_min_score,
             )
         )
 
