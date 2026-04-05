@@ -566,6 +566,136 @@ async def entity_anchored_edge_search(
     return [get_entity_edge_from_record(record, driver.provider) for record in records]
 
 
+async def multi_hop_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+    max_hops: int = 2,
+) -> list[EntityEdge]:
+    """Vector search on entity → multi-hop traversal → return edges at depth 2+.
+
+    Finds edges that are NOT directly connected to the query-matched entity,
+    but reachable via 2-hop paths. Answers queries like "Derek 负责的项目有什么风险"
+    (Derek → Project → Risk edges).
+
+    Only available for Neo4j (requires native vector index + variable-length path).
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_params: dict[str, Any] = {}
+    where_parts = ['e.expired_at IS NULL']
+    if group_ids is not None:
+        where_parts.append('hop.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    where_clause = ' AND '.join(where_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS anchor, score AS anchor_score
+        WHERE anchor_score > $min_score
+        MATCH (anchor)-[:RELATES_TO]->(hop:Entity)-[e:RELATES_TO]-(target:Entity)
+        WHERE {where_clause}
+          AND target.uuid <> anchor.uuid
+        RETURN
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            hop.uuid AS source_node_uuid,
+            target.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            split(e.episodes, ",") AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes
+        ORDER BY anchor_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
+async def community_aware_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[EntityEdge]:
+    """Vector search on entity → find co-community members → return their edges.
+
+    When searching for entity X, also returns edges from entities in the same
+    Community as X. Discovers indirectly related facts that pure entity-anchored
+    search would miss.
+
+    Only available for Neo4j (requires native vector index + community graph).
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_params: dict[str, Any] = {}
+    where_parts = ['e.expired_at IS NULL']
+    if group_ids is not None:
+        where_parts.append('member.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    where_clause = ' AND '.join(where_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS anchor, score AS anchor_score
+        WHERE anchor_score > $min_score
+        MATCH (anchor)<-[:HAS_MEMBER]-(comm:Community)-[:HAS_MEMBER]->(member:Entity)
+        WHERE member.uuid <> anchor.uuid
+        MATCH (member)-[e:RELATES_TO]-(related:Entity)
+        WHERE {where_clause}
+        RETURN DISTINCT
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            member.uuid AS source_node_uuid,
+            related.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            split(e.episodes, ",") AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes
+        ORDER BY anchor_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
 async def edge_bfs_search(
     driver: GraphDriver,
     bfs_origin_node_uuids: list[str] | None,

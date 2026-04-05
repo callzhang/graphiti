@@ -46,6 +46,7 @@ from graphiti_core.search.search_config import (
 )
 from graphiti_core.search.search_filters import SearchFilters
 from graphiti_core.search.search_utils import (
+    community_aware_edge_search,
     community_fulltext_search,
     community_similarity_search,
     edge_bfs_search,
@@ -53,6 +54,7 @@ from graphiti_core.search.search_utils import (
     edge_similarity_search,
     entity_anchored_edge_search,
     episode_fulltext_search,
+    multi_hop_edge_search,
     episode_mentions_reranker,
     get_embeddings_for_communities,
     get_embeddings_for_edges,
@@ -268,17 +270,30 @@ async def edge_search(
                 2 * limit,
             )
         )
-    # Entity-anchored search: vector match on entity nodes → graph traverse to edges.
-    # Runs alongside other methods; results fused via RRF.
+    # Graph-native search paths — combine vector index with graph traversal
+    # in single Cypher queries. These leverage Neo4j capabilities that NumPy cannot replicate.
     if EdgeSearchMethod.cosine_similarity in config.search_methods:
+        # Entity-anchored: vector match entity node → traverse to its edges
         search_tasks.append(
             entity_anchored_edge_search(
-                driver,
-                query_vector,
-                search_filter,
-                group_ids,
-                2 * limit,
-                config.sim_min_score,
+                driver, query_vector, search_filter, group_ids,
+                2 * limit, config.sim_min_score,
+            )
+        )
+        # Multi-hop: vector match entity → 2-hop traversal → edges at depth 2
+        # Answers "Derek 负责的项目有什么风险" (Derek → Project → Risk edges)
+        search_tasks.append(
+            multi_hop_edge_search(
+                driver, query_vector, search_filter, group_ids,
+                limit, config.sim_min_score,  # smaller limit — supplementary path
+            )
+        )
+        # Community-aware: vector match entity → co-community members → their edges
+        # Discovers indirectly related facts from same semantic cluster
+        search_tasks.append(
+            community_aware_edge_search(
+                driver, query_vector, search_filter, group_ids,
+                limit, config.sim_min_score,
             )
         )
 
