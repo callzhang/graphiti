@@ -535,9 +535,10 @@ async def entity_anchored_edge_search(
     query = f"""
         CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
         YIELD node AS entity, score AS entity_score
+        WHERE entity_score > $min_score
         MATCH (entity)-[e:RELATES_TO]-(related:Entity)
         WHERE {where_clause}
-          AND entity_score > $min_score
+        WITH e, entity, related, entity_score
         RETURN
             e.uuid AS uuid,
             e.group_id AS group_id,
@@ -550,7 +551,8 @@ async def entity_anchored_edge_search(
             e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
-            properties(e) AS attributes
+            properties(e) AS attributes,
+            entity_score
         ORDER BY entity_score DESC
         LIMIT $limit
     """
@@ -603,6 +605,7 @@ async def multi_hop_edge_search(
         MATCH (anchor)-[:RELATES_TO]->(hop:Entity)-[e:RELATES_TO]-(target:Entity)
         WHERE {where_clause}
           AND target.uuid <> anchor.uuid
+        WITH e, hop, target, anchor_score
         RETURN
             e.uuid AS uuid,
             e.group_id AS group_id,
@@ -615,7 +618,8 @@ async def multi_hop_edge_search(
             e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
-            properties(e) AS attributes
+            properties(e) AS attributes,
+            anchor_score
         ORDER BY anchor_score DESC
         LIMIT $limit
     """
@@ -668,7 +672,8 @@ async def community_aware_edge_search(
         WHERE member.uuid <> anchor.uuid
         MATCH (member)-[e:RELATES_TO]-(related:Entity)
         WHERE {where_clause}
-        RETURN DISTINCT
+        WITH DISTINCT e, member, related, max(anchor_score) AS best_score
+        RETURN
             e.uuid AS uuid,
             e.group_id AS group_id,
             member.uuid AS source_node_uuid,
@@ -680,8 +685,9 @@ async def community_aware_edge_search(
             e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
-            properties(e) AS attributes
-        ORDER BY anchor_score DESC
+            properties(e) AS attributes,
+            best_score
+        ORDER BY best_score DESC
         LIMIT $limit
     """
     records, _, _ = await driver.execute_query(
