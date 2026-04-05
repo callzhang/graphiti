@@ -17,9 +17,11 @@ limitations under the License.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from graphiti_core.driver import neo4j_driver as module
 
@@ -54,3 +56,65 @@ async def test_close_propagates_unexpected_buffer_error(monkeypatch: pytest.Monk
 
     with pytest.raises(BufferError, match="unexpected"):
         await driver.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_query_suppresses_equivalent_schema_error_logging(monkeypatch: pytest.MonkeyPatch):
+    client = type("MockClient", (), {})()
+    client.execute_query = AsyncMock(side_effect=ClientError("EquivalentSchemaRuleAlreadyExists"))
+    logged_errors: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(module.AsyncGraphDatabase, "driver", lambda *args, **kwargs: client)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(module.logger, "error", lambda *args, **kwargs: logged_errors.append(args))
+
+    driver = module.Neo4jDriver("bolt://localhost:7687", "neo4j", "secret")
+
+    with pytest.raises(ClientError, match="EquivalentSchemaRuleAlreadyExists"):
+        await driver.execute_query("CREATE INDEX x IF NOT EXISTS")
+
+    assert logged_errors == []
+
+
+@pytest.mark.asyncio
+async def test_build_indices_only_creates_missing_indexes(monkeypatch: pytest.MonkeyPatch):
+    client = type("MockClient", (), {})()
+
+    monkeypatch.setattr(module.AsyncGraphDatabase, "driver", lambda *args, **kwargs: client)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    driver = module.Neo4jDriver("bolt://localhost:7687", "neo4j", "secret")
+    driver.execute_query = AsyncMock(
+        return_value=SimpleNamespace(records=[{"names": ["entity_uuid", "episode_content"]}])
+    )
+    driver._execute_index_query = AsyncMock()
+
+    monkeypatch.setattr(
+        module,
+        "get_range_indices",
+        lambda provider: [
+            "CREATE INDEX entity_uuid IF NOT EXISTS FOR (n:Entity) ON (n.uuid)",
+            "CREATE INDEX episode_uuid IF NOT EXISTS FOR (n:Episodic) ON (n.uuid)",
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "get_fulltext_indices",
+        lambda provider: [
+            """CREATE FULLTEXT INDEX episode_content IF NOT EXISTS
+            FOR (e:Episodic) ON EACH [e.content]""",
+            """CREATE FULLTEXT INDEX node_name_and_summary IF NOT EXISTS
+            FOR (n:Entity) ON EACH [n.name]""",
+        ],
+    )
+
+    await driver.build_indices_and_constraints()
+
+    driver.execute_query.assert_awaited_once_with(
+        "SHOW INDEXES YIELD name RETURN collect(name) AS names"
+    )
+    assert [call.args[0] for call in driver._execute_index_query.await_args_list] == [
+        "CREATE INDEX episode_uuid IF NOT EXISTS FOR (n:Episodic) ON (n.uuid)",
+        """CREATE FULLTEXT INDEX node_name_and_summary IF NOT EXISTS
+            FOR (n:Entity) ON EACH [n.name]""",
+    ]
