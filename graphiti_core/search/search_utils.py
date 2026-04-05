@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 RELEVANT_SCHEMA_LIMIT = 10
 DEFAULT_MIN_SCORE = 0.6
+VECTOR_OVER_FETCH_RATIO = 5
 DEFAULT_MMR_LAMBDA = 0.5
 MAX_SEARCH_DEPTH = 3
 MAX_QUERY_LENGTH = 128
@@ -214,6 +215,9 @@ async def edge_fulltext_search(
         search_filter, driver.provider
     )
 
+    # Exclude expired/invalidated edges from fulltext results
+    filter_queries.append('e.expired_at IS NULL')
+
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -249,7 +253,7 @@ async def edge_fulltext_search(
                     e.created_at AS created_at,
                     e.name AS name,
                     e.fact AS fact,
-                    split(e.episodes, ",") AS episodes,
+                    CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
                     e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
@@ -331,6 +335,10 @@ async def edge_similarity_search(
         search_filter, driver.provider
     )
 
+    # Exclude expired/invalidated edges — temporal KG keeps them for history
+    # but search should only return currently-valid facts.
+    filter_queries.append('e.expired_at IS NULL')
+
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -394,7 +402,7 @@ async def edge_similarity_search(
                     r.created_at AS created_at,
                     r.name AS name,
                     r.fact AS fact,
-                    split(r.episodes, ",") AS episodes,
+                    CASE WHEN valueType(r.episodes) STARTS WITH 'LIST' THEN r.episodes WHEN r.episodes IS NULL OR r.episodes = '' THEN [] ELSE split(r.episodes, ',') END AS episodes,
                     r.expired_at AS expired_at,
                     r.valid_at AS valid_at,
                     r.invalid_at AS invalid_at,
@@ -413,7 +421,47 @@ async def edge_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search — O(log N) instead of O(N) cosine scan.
+        # Over-fetch to compensate for post-filtering by group_id/expired_at.
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+        filter_parts = []
+        if group_ids is not None:
+            filter_parts.append('e.group_id IN $group_ids')
+            filter_params['group_ids'] = group_ids
+        filter_parts.append('e.expired_at IS NULL')
+        if source_node_uuid is not None:
+            filter_parts.append('n.uuid = $source_uuid')
+            filter_params['source_uuid'] = source_node_uuid
+        if target_node_uuid is not None:
+            filter_parts.append('m.uuid = $target_uuid')
+            filter_params['target_uuid'] = target_node_uuid
+
+        where_clause = (' WHERE ' + ' AND '.join(filter_parts)) if filter_parts else ''
+
+        query = f"""
+            CALL db.index.vector.queryRelationships('edge_fact_embedding', $over_limit, $search_vector)
+            YIELD relationship AS rel, score
+            MATCH (n:Entity)-[e:RELATES_TO {{uuid: rel.uuid}}]->(m:Entity)
+            {where_clause}
+            AND score > $min_score
+            RETURN
+            {get_entity_edge_return_query(driver.provider)}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
     else:
+        # Fallback: in-memory cosine for other providers (Kuzu, FalkorDB)
         query = (
             match_query
             + filter_query
@@ -445,6 +493,215 @@ async def edge_similarity_search(
     return edges
 
 
+async def entity_anchored_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[EntityEdge]:
+    """Vector search on entity nodes → graph traversal to their edges.
+
+    This combines vector similarity (find relevant entities) with graph
+    structure (traverse to their relationships) in a single Cypher query.
+    NumPy cannot do this — it requires the DB to join vector index results
+    with graph topology natively.
+
+    Complements pure edge-fact vector search: when the query names an entity
+    ("Atlas 的目标"), this path finds edges anchored to that entity even if
+    the edge fact text doesn't match the query vector well.
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []  # Only Neo4j supports native vector index + graph traversal
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_parts = ['e.expired_at IS NULL']
+    filter_params: dict[str, Any] = {}
+    if group_ids is not None:
+        filter_parts.append('entity.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    # Add search filter conditions
+    edge_filter_queries, edge_filter_params = edge_search_filter_query_constructor(
+        search_filter, driver.provider
+    )
+    filter_parts.extend(edge_filter_queries)
+    filter_params.update(edge_filter_params)
+
+    where_clause = ' AND '.join(filter_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS entity, score AS entity_score
+        WHERE entity_score > $min_score
+        MATCH (entity)-[e:RELATES_TO]-(related:Entity)
+        WHERE {where_clause}
+        WITH e, entity, related, entity_score
+        RETURN
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            entity.uuid AS source_node_uuid,
+            related.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes,
+            entity_score
+        ORDER BY entity_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
+async def multi_hop_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+    max_hops: int = 2,
+) -> list[EntityEdge]:
+    """Vector search on entity → multi-hop traversal → return edges at depth 2+.
+
+    Finds edges that are NOT directly connected to the query-matched entity,
+    but reachable via 2-hop paths. Answers queries like "Derek 负责的项目有什么风险"
+    (Derek → Project → Risk edges).
+
+    Only available for Neo4j (requires native vector index + variable-length path).
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_params: dict[str, Any] = {}
+    where_parts = ['e.expired_at IS NULL']
+    if group_ids is not None:
+        where_parts.append('hop.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    where_clause = ' AND '.join(where_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS anchor, score AS anchor_score
+        WHERE anchor_score > $min_score
+        MATCH (anchor)-[:RELATES_TO]->(hop:Entity)-[e:RELATES_TO]-(target:Entity)
+        WHERE {where_clause}
+          AND target.uuid <> anchor.uuid
+        WITH e, hop, target, anchor_score
+        RETURN
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            hop.uuid AS source_node_uuid,
+            target.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes,
+            anchor_score
+        ORDER BY anchor_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
+async def community_aware_edge_search(
+    driver: GraphDriver,
+    query_vector: list[float],
+    search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit: int = RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[EntityEdge]:
+    """Vector search on entity → find co-community members → return their edges.
+
+    When searching for entity X, also returns edges from entities in the same
+    Community as X. Discovers indirectly related facts that pure entity-anchored
+    search would miss.
+
+    Only available for Neo4j (requires native vector index + community graph).
+    """
+    if driver.provider != GraphProvider.NEO4J:
+        return []
+
+    over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+    filter_params: dict[str, Any] = {}
+    where_parts = ['e.expired_at IS NULL']
+    if group_ids is not None:
+        where_parts.append('member.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
+
+    where_clause = ' AND '.join(where_parts)
+
+    query = f"""
+        CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $query_vector)
+        YIELD node AS anchor, score AS anchor_score
+        WHERE anchor_score > $min_score
+        MATCH (anchor)<-[:HAS_MEMBER]-(comm:Community)-[:HAS_MEMBER]->(member:Entity)
+        WHERE member.uuid <> anchor.uuid
+        MATCH (member)-[e:RELATES_TO]-(related:Entity)
+        WHERE {where_clause}
+        WITH DISTINCT e, member, related, max(anchor_score) AS best_score
+        RETURN
+            e.uuid AS uuid,
+            e.group_id AS group_id,
+            member.uuid AS source_node_uuid,
+            related.uuid AS target_node_uuid,
+            e.created_at AS created_at,
+            e.name AS name,
+            e.fact AS fact,
+            CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
+            e.expired_at AS expired_at,
+            e.valid_at AS valid_at,
+            e.invalid_at AS invalid_at,
+            properties(e) AS attributes,
+            best_score
+        ORDER BY best_score DESC
+        LIMIT $limit
+    """
+    records, _, _ = await driver.execute_query(
+        query,
+        query_vector=query_vector,
+        over_limit=over_limit,
+        limit=limit,
+        min_score=min_score,
+        routing_='r',
+        **filter_params,
+    )
+    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+
 async def edge_bfs_search(
     driver: GraphDriver,
     bfs_origin_node_uuids: list[str] | None,
@@ -468,6 +725,9 @@ async def edge_bfs_search(
     filter_queries, filter_params = edge_search_filter_query_constructor(
         search_filter, driver.provider
     )
+
+    # Exclude expired/invalidated edges from BFS traversal
+    filter_queries.append('e.expired_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -536,7 +796,7 @@ async def edge_bfs_search(
                     e.created_at AS created_at,
                     e.name AS name,
                     e.fact AS fact,
-                    split(e.episodes, ',') AS episodes,
+                    CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
                     e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
@@ -753,11 +1013,37 @@ async def node_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+        filter_parts = list(filter_queries)
+        where_clause = (' WHERE ' + ' AND '.join(filter_parts)) if filter_parts else ''
+
+        query = f"""
+            CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $search_vector)
+            YIELD node AS n, score
+            {where_clause}
+            {"AND" if filter_parts else "WHERE"} score > $min_score
+            RETURN
+            {get_entity_node_return_query(driver.provider)}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
     else:
+        # Fallback for Kuzu/FalkorDB
         query = (
             """
-                                                                                                                                    MATCH (n:Entity)
-                                                                                                                                    """
+            MATCH (n:Entity)
+            """
             + filter_query
             + """
             WITH n, """
@@ -1137,15 +1423,44 @@ async def community_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+        group_where = ''
+        if group_ids is not None:
+            group_where = ' WHERE c.group_id IN $group_ids AND'
+            query_params['group_ids'] = group_ids
+        else:
+            group_where = ' WHERE'
+
+        query = f"""
+            CALL db.index.vector.queryNodes('community_name_embedding', $over_limit, $search_vector)
+            YIELD node AS c, score
+            {group_where} score > $min_score
+            RETURN
+            {COMMUNITY_NODE_RETURN}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **query_params,
+        )
     else:
+        # Fallback for Kuzu/FalkorDB
         search_vector_var = '$search_vector'
         if driver.provider == GraphProvider.KUZU:
             search_vector_var = f'CAST($search_vector AS FLOAT[{len(search_vector)}])'
 
         query = (
             """
-                                                                                                                                    MATCH (c:Community)
-                                                                                                                                    """
+            MATCH (c:Community)
+            """
             + group_filter_query
             + """
             WITH c,
@@ -1470,7 +1785,7 @@ async def get_relevant_edges(
                 group_id: e.group_id,
                 fact: e.fact,
                 fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
-                episodes: split(e.episodes, ","),
+                episodes: CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END,
                 expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,
@@ -1657,7 +1972,7 @@ async def get_edge_invalidation_candidates(
                 group_id: e.group_id,
                 fact: e.fact,
                 fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
-                episodes: split(e.episodes, ","),
+                episodes: CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END,
                 expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,

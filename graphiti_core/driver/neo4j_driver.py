@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
@@ -74,6 +76,9 @@ class Neo4jDriver(GraphDriver):
             auth=(user or '', password or ''),
         )
         self._database = database
+        self._close_lock = asyncio.Lock()
+        self._closed = False
+        self._index_init_task: asyncio.Task[Any] | None = None
 
         # Instantiate Neo4j operations
         self._entity_node_ops = Neo4jEntityNodeOperations()
@@ -89,13 +94,11 @@ class Neo4jDriver(GraphDriver):
         self._graph_ops = Neo4jGraphMaintenanceOperations()
 
         # Schedule the indices and constraints to be built
-        import asyncio
-
         try:
             # Try to get the current event loop
             loop = asyncio.get_running_loop()
             # Schedule the build_indices_and_constraints to run
-            loop.create_task(self.build_indices_and_constraints())
+            self._index_init_task = loop.create_task(self.build_indices_and_constraints())
         except RuntimeError:
             # No event loop running, this will be handled later
             pass
@@ -170,8 +173,13 @@ class Neo4jDriver(GraphDriver):
 
         try:
             result = await self.client.execute_query(cypher_query_, parameters_=params, **kwargs)
-        except Exception as e:
-            logger.error(f'Error executing Neo4j query: {e}\n{cypher_query_}\n{params}')
+        except ClientError as exc:
+            if 'EquivalentSchemaRuleAlreadyExists' in str(exc):
+                raise
+            logger.error('Error executing Neo4j query: %s\n%s\n%s', exc, cypher_query_, params)
+            raise
+        except Exception as exc:
+            logger.error('Error executing Neo4j query: %s\n%s\n%s', exc, cypher_query_, params)
             raise
 
         return result
@@ -181,7 +189,29 @@ class Neo4jDriver(GraphDriver):
         return self.client.session(database=_database)  # type: ignore
 
     async def close(self) -> None:
-        return await self.client.close()
+        async with self._close_lock:
+            if self._closed:
+                return None
+
+            init_task = self._index_init_task
+            if init_task is not None:
+                self._index_init_task = None
+                if not init_task.done():
+                    init_task.cancel()
+                if init_task is not asyncio.current_task():
+                    await asyncio.gather(init_task, return_exceptions=True)
+
+            try:
+                await self.client.close()
+            except BufferError as exc:
+                if 'Existing exports of data: object cannot be re-sized' not in str(exc):
+                    raise
+                logger.warning(
+                    'Ignoring known neo4j async driver BufferError during close; shutdown will continue'
+                )
+
+            self._closed = True
+            return None
 
     def delete_all_indexes(self) -> Coroutine:
         return self.client.execute_query(
@@ -203,6 +233,30 @@ class Neo4jDriver(GraphDriver):
                 return None
             raise
 
+    def _extract_index_name(self, query: str) -> str | None:
+        match = re.search(
+            r'CREATE\s+(?:FULLTEXT\s+)?INDEX\s+([A-Za-z_][A-Za-z0-9_]*)\s+IF\s+NOT\s+EXISTS',
+            query,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        return match.group(1)
+
+    async def _list_existing_index_names(self) -> set[str]:
+        try:
+            result = await self.execute_query('SHOW INDEXES YIELD name RETURN collect(name) AS names')
+        except Exception:
+            result = await self.execute_query('CALL db.indexes() YIELD name RETURN collect(name) AS names')
+
+        records = getattr(result, 'records', None) or []
+        if not records:
+            return set()
+
+        record = records[0]
+        names = record.get('names') if hasattr(record, 'get') else record['names']
+        return {str(name) for name in (names or []) if name}
+
     async def build_indices_and_constraints(self, delete_existing: bool = False):
         if delete_existing:
             await self.delete_all_indexes()
@@ -212,8 +266,14 @@ class Neo4jDriver(GraphDriver):
         fulltext_indices: list[LiteralString] = get_fulltext_indices(self.provider)
 
         index_queries: list[LiteralString] = range_indices + fulltext_indices
-
-        await semaphore_gather(*[self._execute_index_query(query) for query in index_queries])
+        existing_names = await self._list_existing_index_names()
+        missing_queries = [
+            query
+            for query in index_queries
+            if (index_name := self._extract_index_name(query)) is None or index_name not in existing_names
+        ]
+        if missing_queries:
+            await semaphore_gather(*[self._execute_index_query(query) for query in missing_queries])
 
     async def health_check(self) -> None:
         """Check Neo4j connectivity by running the driver's verify_connectivity method."""

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = 'gpt-4.1-mini'
 DEFAULT_SMALL_MODEL = 'gpt-4.1-nano'
-DEFAULT_REASONING = 'minimal'
+DEFAULT_REASONING = 'low'
 DEFAULT_VERBOSITY = 'low'
 
 

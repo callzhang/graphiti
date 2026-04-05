@@ -20,6 +20,29 @@ from typing import Any
 DO_NOT_ESCAPE_UNICODE = '\nDo not escape unicode characters.\n'
 
 
+def _normalize_prompt_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _normalize_prompt_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_prompt_value(item) for item in value]
+    if hasattr(value, 'model_dump') and callable(value.model_dump):
+        return _normalize_prompt_value(value.model_dump())
+    if hasattr(value, 'dict') and callable(value.dict):
+        return _normalize_prompt_value(value.dict())
+    if hasattr(value, 'iso_format') and callable(value.iso_format):
+        return str(value.iso_format())
+    if hasattr(value, 'isoformat') and callable(value.isoformat):
+        try:
+            return str(value.isoformat())
+        except TypeError:
+            pass
+    if hasattr(value, '__dict__'):
+        return _normalize_prompt_value(vars(value))
+    return str(value)
+
+
 def to_prompt_json(data: Any, ensure_ascii: bool = False, indent: int | None = None) -> str:
     """
     Serialize data to JSON for use in prompts.
@@ -37,4 +60,4 @@ def to_prompt_json(data: Any, ensure_ascii: bool = False, indent: int | None = N
         are preserved in their original form in the prompt, making them readable
         in LLM logs and improving model understanding.
     """
-    return json.dumps(data, ensure_ascii=ensure_ascii, indent=indent)
+    return json.dumps(_normalize_prompt_value(data), ensure_ascii=ensure_ascii, indent=indent)
