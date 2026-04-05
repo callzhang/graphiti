@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 RELEVANT_SCHEMA_LIMIT = 10
 DEFAULT_MIN_SCORE = 0.6
+VECTOR_OVER_FETCH_RATIO = 5
 DEFAULT_MMR_LAMBDA = 0.5
 MAX_SEARCH_DEPTH = 3
 MAX_QUERY_LENGTH = 128
@@ -420,7 +421,47 @@ async def edge_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search — O(log N) instead of O(N) cosine scan.
+        # Over-fetch to compensate for post-filtering by group_id/expired_at.
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+
+        filter_parts = []
+        if group_ids is not None:
+            filter_parts.append('e.group_id IN $group_ids')
+            filter_params['group_ids'] = group_ids
+        filter_parts.append('e.expired_at IS NULL')
+        if source_node_uuid is not None:
+            filter_parts.append('n.uuid = $source_uuid')
+            filter_params['source_uuid'] = source_node_uuid
+        if target_node_uuid is not None:
+            filter_parts.append('m.uuid = $target_uuid')
+            filter_params['target_uuid'] = target_node_uuid
+
+        where_clause = (' WHERE ' + ' AND '.join(filter_parts)) if filter_parts else ''
+
+        query = f"""
+            CALL db.index.vector.queryRelationships('edge_fact_embedding', $over_limit, $search_vector)
+            YIELD relationship AS rel, score
+            MATCH (n:Entity)-[e:RELATES_TO {{uuid: rel.uuid}}]->(m:Entity)
+            {where_clause}
+            AND score > $min_score
+            RETURN
+            {get_entity_edge_return_query(driver.provider)}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
     else:
+        # Fallback: in-memory cosine for other providers (Kuzu, FalkorDB)
         query = (
             match_query
             + filter_query
@@ -763,11 +804,37 @@ async def node_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+        filter_parts = list(filter_queries)
+        where_clause = (' WHERE ' + ' AND '.join(filter_parts)) if filter_parts else ''
+
+        query = f"""
+            CALL db.index.vector.queryNodes('entity_name_embedding', $over_limit, $search_vector)
+            YIELD node AS n, score
+            {where_clause}
+            {"AND" if filter_parts else "WHERE"} score > $min_score
+            RETURN
+            {get_entity_node_return_query(driver.provider)}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
     else:
+        # Fallback for Kuzu/FalkorDB
         query = (
             """
-                                                                                                                                    MATCH (n:Entity)
-                                                                                                                                    """
+            MATCH (n:Entity)
+            """
             + filter_query
             + """
             WITH n, """
@@ -1147,15 +1214,44 @@ async def community_similarity_search(
             )
         else:
             return []
+    elif driver.provider == GraphProvider.NEO4J:
+        # Native HNSW vector index search
+        over_limit = limit * VECTOR_OVER_FETCH_RATIO
+        group_where = ''
+        if group_ids is not None:
+            group_where = ' WHERE c.group_id IN $group_ids AND'
+            query_params['group_ids'] = group_ids
+        else:
+            group_where = ' WHERE'
+
+        query = f"""
+            CALL db.index.vector.queryNodes('community_name_embedding', $over_limit, $search_vector)
+            YIELD node AS c, score
+            {group_where} score > $min_score
+            RETURN
+            {COMMUNITY_NODE_RETURN}
+            ORDER BY score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            over_limit=over_limit,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **query_params,
+        )
     else:
+        # Fallback for Kuzu/FalkorDB
         search_vector_var = '$search_vector'
         if driver.provider == GraphProvider.KUZU:
             search_vector_var = f'CAST($search_vector AS FLOAT[{len(search_vector)}])'
 
         query = (
             """
-                                                                                                                                    MATCH (c:Community)
-                                                                                                                                    """
+            MATCH (c:Community)
+            """
             + group_filter_query
             + """
             WITH c,
