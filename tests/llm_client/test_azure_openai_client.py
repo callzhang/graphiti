@@ -62,7 +62,7 @@ async def test_structured_completion_strips_reasoning_for_unsupported_models():
     client = AzureOpenAILLMClient(
         azure_client=dummy_client,
         config=LLMConfig(),
-        reasoning='minimal',
+        reasoning='low',
         verbosity='low',
     )
 
@@ -72,7 +72,7 @@ async def test_structured_completion_strips_reasoning_for_unsupported_models():
         temperature=0.4,
         max_tokens=64,
         response_model=DummyResponseModel,
-        reasoning='minimal',
+        reasoning='low',
         verbosity='low',
     )
 
