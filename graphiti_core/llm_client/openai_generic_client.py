@@ -34,6 +34,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = 'gpt-4.1-mini'
 
 
+def _ensure_additional_properties_false(schema: dict[str, Any]) -> None:
+    """Recursively set additionalProperties=false on all object schemas.
+
+    Required by strict structured-output endpoints (e.g. api.kksj.org) that
+    enforce the OpenAI json_schema strict mode contract.
+    """
+    if schema.get('type') == 'object' or 'properties' in schema:
+        schema.setdefault('additionalProperties', False)
+    for key in ('properties', 'definitions', '$defs'):
+        for sub in (schema.get(key) or {}).values():
+            if isinstance(sub, dict):
+                _ensure_additional_properties_false(sub)
+    for key in ('items', 'additionalItems', 'not'):
+        sub = schema.get(key)
+        if isinstance(sub, dict):
+            _ensure_additional_properties_false(sub)
+    for key in ('anyOf', 'allOf', 'oneOf'):
+        for sub in schema.get(key) or []:
+            if isinstance(sub, dict):
+                _ensure_additional_properties_false(sub)
+
+
 class OpenAIGenericClient(LLMClient):
     """
     OpenAIClient is a client class for interacting with OpenAI's language models.
@@ -112,10 +134,12 @@ class OpenAIGenericClient(LLMClient):
             if response_model is not None:
                 schema_name = getattr(response_model, '__name__', 'structured_response')
                 json_schema = response_model.model_json_schema()
+                _ensure_additional_properties_false(json_schema)
                 response_format = {
                     'type': 'json_schema',
                     'json_schema': {
                         'name': schema_name,
+                        'strict': True,
                         'schema': json_schema,
                     },
                 }
