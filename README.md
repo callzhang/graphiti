@@ -281,6 +281,7 @@ The quickstart demonstrates:
 Episode retrieval now uses the same hybrid pattern as entity/community retrieval:
 - `bm25` for exact lexical matches on `Episodic.content` / `source_description`
 - `cosine_similarity` over `Episodic.content_embedding` for semantic recall
+- a static `mmr` diversity signal computed from episode embeddings and merged into the final `rrf` seed list
 - `rrf` or `cross_encoder` on the merged candidate set
 
 This retrieval embedding is separate from any application-level dedup embedding. Retrieval should optimize semantic

@@ -1,10 +1,12 @@
 from unittest.mock import AsyncMock, patch
 
+import numpy as np
+
 import pytest
 
 from graphiti_core.nodes import EntityNode
 from graphiti_core.search.search_filters import SearchFilters
-from graphiti_core.search.search_utils import hybrid_node_search
+from graphiti_core.search.search_utils import hybrid_node_search, maximal_marginal_relevance
 
 
 @pytest.mark.asyncio
@@ -161,3 +163,22 @@ async def test_hybrid_node_search_with_limit_and_duplicates():
         mock_similarity_search.assert_called_with(
             mock_driver, [0.1, 0.2, 0.3], SearchFilters(), ['1'], 4
         )
+
+
+def test_maximal_marginal_relevance_normalizes_query_vector():
+    candidates = {
+        'a': [1.0, 0.0],
+        'b': [0.0, 1.0],
+    }
+
+    uuids_unit, scores_unit = maximal_marginal_relevance(
+        [1.0, 0.0],
+        candidates,
+    )
+    uuids_scaled, scores_scaled = maximal_marginal_relevance(
+        [10.0, 0.0],
+        candidates,
+    )
+
+    assert uuids_unit == uuids_scaled
+    assert np.allclose(scores_unit, scores_scaled)

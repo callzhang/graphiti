@@ -2323,7 +2323,7 @@ def maximal_marginal_relevance(
     min_score: float = -2.0,
 ) -> tuple[list[str], list[float]]:
     start = time()
-    query_array = np.array(query_vector)
+    query_array = normalize_l2(query_vector)
     candidate_arrays: dict[str, NDArray] = {}
     for uuid, embedding in candidates.items():
         candidate_arrays[uuid] = normalize_l2(embedding)

@@ -1,9 +1,11 @@
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
+from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search import edge_search, search
 from graphiti_core.search.search_config import (
     EdgeSearchConfig,
@@ -194,3 +196,69 @@ async def test_search_emits_trace_spans_for_episode_similarity(monkeypatch):
     assert 'search.episode_search' in span_names
     assert 'search.episode_search.execute_methods' in span_names
     assert 'search.episode_search.rerank' in span_names
+
+
+@pytest.mark.asyncio
+async def test_search_emits_trace_spans_for_episode_mmr_signal(monkeypatch):
+    async def fake_episode_similarity_search(*args, **kwargs):
+        return [
+            EpisodicNode(
+                uuid="ep-1",
+                name="ep-1",
+                group_id="g1",
+                source=EpisodeType.message,
+                source_description="src",
+                content="ep-1",
+                content_embedding=[1.0, 0.0],
+                valid_at=datetime.now(),
+            ),
+            EpisodicNode(
+                uuid="ep-2",
+                name="ep-2",
+                group_id="g1",
+                source=EpisodeType.message,
+                source_description="src",
+                content="ep-2",
+                content_embedding=[0.9, 0.1],
+                valid_at=datetime.now(),
+            ),
+        ]
+
+    async def fake_embedder_create(*, input_data):
+        return [1.0, 0.0]
+
+    def fake_mmr(*args, **kwargs):
+        return (["ep-1", "ep-2"], [0.5, 0.2])
+
+    monkeypatch.setattr(
+        'graphiti_core.search.search.episode_similarity_search',
+        fake_episode_similarity_search,
+    )
+    monkeypatch.setattr(
+        'graphiti_core.search.search.maximal_marginal_relevance',
+        fake_mmr,
+    )
+
+    tracer = RecordingTracer()
+    clients = SimpleNamespace(
+        driver=SimpleNamespace(),
+        embedder=SimpleNamespace(create=fake_embedder_create),
+        cross_encoder=SimpleNamespace(),
+        tracer=tracer,
+    )
+
+    results = await search(
+        clients,
+        query='where is the episode',
+        group_ids=None,
+        config=SearchConfig(
+            episode_config=EpisodeSearchConfig(
+                search_methods=[EpisodeSearchMethod.cosine_similarity],
+            ),
+        ),
+        search_filter=SearchFilters(),
+    )
+
+    assert len(results.episodes) == 2
+    span_names = [span.name for span in tracer.spans]
+    assert 'search.episode_search.compute_mmr_signal' in span_names

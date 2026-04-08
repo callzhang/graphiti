@@ -50,6 +50,7 @@ from graphiti_core.search.search_config import (
 )
 from graphiti_core.search.search_filters import SearchFilters
 from graphiti_core.search.search_utils import (
+    DEFAULT_MMR_LAMBDA,
     community_aware_edge_search,
     community_fulltext_search,
     community_similarity_search,
@@ -799,6 +800,26 @@ async def episode_search(
         episode_uuid_map = {
             episode.uuid: episode for result in search_results for episode in result
         }
+        if EpisodeSearchMethod.cosine_similarity in config.search_methods:
+            episode_embeddings = {
+                episode.uuid: episode.content_embedding
+                for episode in episode_uuid_map.values()
+                if episode.content_embedding is not None
+            }
+            if episode_embeddings:
+                with _trace_phase(
+                    search_tracer,
+                    'search.episode_search.compute_mmr_signal',
+                    {'candidate_count': len(episode_embeddings)},
+                ):
+                    mmr_episode_uuids, _ = maximal_marginal_relevance(
+                        _query_vector,
+                        episode_embeddings,
+                        DEFAULT_MMR_LAMBDA,
+                        reranker_min_score,
+                    )
+                if mmr_episode_uuids:
+                    search_result_uuids.append(mmr_episode_uuids)
 
         reranked_uuids: list[str] = []
         episode_scores: list[float] = []
