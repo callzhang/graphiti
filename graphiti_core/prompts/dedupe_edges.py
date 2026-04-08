@@ -92,13 +92,19 @@ IMPORTANT constraints:
 Guidelines:
 1. Some facts may be very similar but will have key differences, particularly around numeric values.
    Do not mark these as duplicates.
-2. **State facts are unique per entity at any point in time.**
+2. **Be conservative about contradictions for mutable state.**
    Facts about targets, goals, ownership, leadership, status, decisions, or strategies
-   represent mutable state — only the latest value is valid.
-   If the NEW FACT updates the same entity's state (e.g., target 60万→100万,
-   owner Kevin→Derek, status "in progress"→"completed"), mark ALL older
-   versions in EXISTING FACTS as contradicted, even if their wording differs.
-   This applies regardless of whether they use the same relation type name.
+   may represent mutable state, but ONLY mark an older fact as contradicted when
+   the NEW FACT clearly updates the SAME state dimension or slot.
+   Examples:
+   - target 60万→100万 can contradict an older target fact
+   - owner Kevin→Derek can contradict an older owner fact
+   - status "in progress"→"completed" can contradict an older status fact
+   Counterexamples:
+   - a general status note like "节奏稳，继续推进" does NOT contradict a target value
+   - an owner update does NOT contradict a target/budget/status fact
+   - do NOT mark facts as contradicted solely because they mention the same entity
+     if they describe different relationship dimensions.
 
 You will receive TWO lists of facts with CONTINUOUS idx numbering across both lists.
 EXISTING FACTS are indexed first, followed by FACT INVALIDATION CANDIDATES.
@@ -178,12 +184,14 @@ FACT INVALIDATION CANDIDATES:
         Guidelines:
         1. Some facts may be very similar but will have key differences, particularly around numeric values.
            Do not mark these as duplicates.
-        2. **State facts are unique per entity at any point in time.**
-           Facts about targets, goals, ownership, leadership, status, decisions, or strategies
-           represent mutable state — only the latest value is valid.
-           If the NEW FACT updates the same entity's state (e.g., target 60万→100万,
-           owner Kevin→Derek, status "in progress"→"completed"), mark ALL older
-           versions as contradicted, even if their wording or relation type differs.
+        2. **Be conservative about contradictions for mutable state.**
+           Only mark older facts as contradicted when the NEW FACT clearly updates the SAME
+           state dimension or slot.
+           - target updates contradict older target facts
+           - owner updates contradict older owner facts
+           - status updates contradict older status facts
+           Do NOT contradict facts across different relationship dimensions just because they
+           mention the same entity.
 
         {edges_block}
         """,

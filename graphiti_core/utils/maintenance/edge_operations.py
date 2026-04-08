@@ -647,6 +647,11 @@ def resolve_edge_contradictions(
     # Determine which contradictory edges need to be expired
     invalidated_edges: list[EntityEdge] = []
     for edge in invalidation_candidates:
+        # Be conservative: only invalidate older facts that share the same
+        # relation dimension. Different edge names often represent different
+        # state slots, even when they mention the same entity.
+        if edge.name != resolved_edge.name:
+            continue
         # (Edge invalid before new edge becomes valid) or (new edge invalid before edge becomes valid)
         edge_invalid_at_utc = ensure_utc(edge.invalid_at)
         resolved_edge_valid_at_utc = ensure_utc(resolved_edge.valid_at)

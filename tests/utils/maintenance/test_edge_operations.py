@@ -10,6 +10,7 @@ from graphiti_core.nodes import EntityNode, EpisodicNode
 from graphiti_core.search.search_config import SearchResults
 from graphiti_core.utils.maintenance.edge_operations import (
     extract_edges,
+    resolve_edge_contradictions,
     resolve_extracted_edge,
     resolve_extracted_edges,
 )
@@ -701,3 +702,34 @@ async def test_extract_edges_keeps_valid_edges_with_same_name_different_nodes(mo
     assert len(edges) == 1
     assert edges[0].source_node_uuid == 'alice_uuid'
     assert edges[0].target_node_uuid == 'paris_uuid'
+
+
+def test_resolve_edge_contradictions_skips_different_relation_names():
+    now = datetime.now(timezone.utc)
+    resolved_edge = EntityEdge(
+        source_node_uuid='atlas_uuid',
+        target_node_uuid='status_uuid',
+        name='HAS_STATUS',
+        group_id='group_1',
+        fact='Atlas 节奏稳，继续推进。',
+        episodes=['episode_new'],
+        created_at=now,
+        valid_at=now,
+        invalid_at=None,
+    )
+    old_goal_edge = EntityEdge(
+        source_node_uuid='atlas_uuid',
+        target_node_uuid='goal_uuid',
+        name='HAS_TARGET',
+        group_id='group_1',
+        fact="Atlas's target was raised to 100 万.",
+        episodes=['episode_old'],
+        created_at=now - timedelta(days=7),
+        valid_at=now - timedelta(days=7),
+        invalid_at=None,
+    )
+
+    invalidated = resolve_edge_contradictions(resolved_edge, [old_goal_edge])
+
+    assert invalidated == []
+    assert old_goal_edge.invalid_at is None
