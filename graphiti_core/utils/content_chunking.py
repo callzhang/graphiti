@@ -32,28 +32,32 @@ from graphiti_core.nodes import EpisodeType
 
 logger = logging.getLogger(__name__)
 
-# Approximate characters per token (conservative estimate)
-CHARS_PER_TOKEN = 4
-
+# Character-to-token multiplier for slicing text.
+# We use a conservative 1.2 characters per token to ensure Chinese characters 
+# (which cost up to 1.5-2 tokens each) do not blow up the 8K context limit, 
+# while still giving English text enough room.
+CHARS_PER_TOKEN_SLICE = 1.2
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count using character-based heuristic.
+    """Estimate token count using a byte-based heuristic to safely support CJK languages.
 
-    Uses ~4 characters per token as a conservative estimate.
-    This is faster than actual tokenization and works across all LLM providers.
-
-    Args:
-        text: The text to estimate tokens for
-
-    Returns:
-        Estimated token count
+    A Chinese character is typically 3 bytes and converts to ~1.5 tokens under cl100k_base.
+    An English character is 1 byte (~0.25 tokens).
+    Dividing the UTF-8 byte length by 2 provides a much safer estimate than simple char length:
+    - English: ~0.5 tokens per char (conservative overestimation)
+    - Chinese: ~1.5 tokens per char (accurate approximation)
     """
-    return len(text) // CHARS_PER_TOKEN
-
+    if not text:
+        return 0
+    return max(1, len(text.encode('utf-8')) // 2)
 
 def _tokens_to_chars(tokens: int) -> int:
-    """Convert token count to approximate character count."""
-    return tokens * CHARS_PER_TOKEN
+    """Convert token count to approximate character count for slicing.
+    
+    A strict 1.2 ratio ensures that a 5000 token limit results in max 6000 chars.
+    6000 Chinese chars ≈ 9000-10000 actual tokens (close the 8k-10k roof).
+    """
+    return int(tokens * CHARS_PER_TOKEN_SLICE)
 
 
 def should_chunk(content: str, episode_type: EpisodeType) -> bool:

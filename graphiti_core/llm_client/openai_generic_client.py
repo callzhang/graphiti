@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import asyncio
 import json
 import logging
 import typing
@@ -78,7 +79,7 @@ class OpenAIGenericClient(LLMClient):
     """
 
     # Class-level constants
-    MAX_RETRIES: ClassVar[int] = 2
+    MAX_RETRIES: ClassVar[int] = 2  # 3 total outer attempts (each up to 30s on timeout)
 
     def __init__(
         self,
@@ -144,14 +145,37 @@ class OpenAIGenericClient(LLMClient):
                     },
                 }
 
-            response = await self.client.chat.completions.create(
-                model=self.model or DEFAULT_MODEL,
-                messages=openai_messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                response_format=response_format,  # type: ignore[arg-type]
-            )
-            result = response.choices[0].message.content or ''
+            # Inner retry loop specifically for empty-content responses.
+            # The API at times returns HTTP 200 with empty body (likely a capacity/routing
+            # issue). These fail fast (~0s) so we can afford a few extra attempts here
+            # without burning the outer MAX_RETRIES budget (which carries a 30s timeout
+            # per attempt and appends error context that isn't useful for empty responses).
+            _EMPTY_INNER_RETRIES = 4  # up to 5 total API calls for empty-content cases
+            _inner_attempt = 0
+            while True:
+                response = await self.client.chat.completions.create(
+                    model=self.model or DEFAULT_MODEL,
+                    messages=openai_messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    response_format=response_format,  # type: ignore[arg-type]
+                    timeout=30.0,  # prevent indefinite hang; raises APITimeoutError after 30s
+                )
+                result = response.choices[0].message.content or ''
+                if result.strip():
+                    break  # got a non-empty response
+                _inner_attempt += 1
+                if _inner_attempt > _EMPTY_INNER_RETRIES:
+                    raise ValueError(
+                        f'LLM returned empty response content after {_inner_attempt} attempts '
+                        f'(model={self.model or DEFAULT_MODEL}). '
+                        f'finish_reason={response.choices[0].finish_reason!r}'
+                    )
+                logger.warning(
+                    f'LLM returned empty content (model={self.model or DEFAULT_MODEL}), '
+                    f'inner retry {_inner_attempt}/{_EMPTY_INNER_RETRIES}'
+                )
+                await asyncio.sleep(0.5)
             return json.loads(result)
         except openai.RateLimitError as e:
             raise RateLimitError from e
@@ -202,10 +226,20 @@ class OpenAIGenericClient(LLMClient):
                     openai.APITimeoutError,
                     openai.APIConnectionError,
                     openai.InternalServerError,
-                ):
-                    # Let OpenAI's client handle these retries
-                    span.set_status('error', str(last_error))
-                    raise
+                ) as e:
+                    # With timeout=30s per attempt, these are bounded — retry them.
+                    last_error = e
+                    if retry_count >= self.MAX_RETRIES:
+                        logger.error(f'Max retries ({self.MAX_RETRIES}) exceeded. Last error: {e}')
+                        span.set_status('error', str(e))
+                        span.record_exception(e)
+                        raise
+                    retry_count += 1
+                    logger.warning(
+                        f'Retrying after transient API error (attempt {retry_count}/{self.MAX_RETRIES}): {e}'
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
                 except Exception as e:
                     last_error = e
 
@@ -218,7 +252,9 @@ class OpenAIGenericClient(LLMClient):
 
                     retry_count += 1
 
-                    # Construct a detailed error message for the LLM
+                    # Inject error context so the LLM knows why the previous attempt failed.
+                    # (Empty-response cases are already retried inside _generate_response;
+                    # if they still reach here it means all inner retries exhausted.)
                     error_context = (
                         f'The previous response attempt was invalid. '
                         f'Error type: {e.__class__.__name__}. '
@@ -226,7 +262,6 @@ class OpenAIGenericClient(LLMClient):
                         f'Please try again with a valid response, ensuring the output matches '
                         f'the expected format and constraints.'
                     )
-
                     error_message = Message(role='user', content=error_context)
                     messages.append(error_message)
                     logger.warning(
