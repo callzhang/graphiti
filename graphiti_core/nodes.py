@@ -313,6 +313,12 @@ class Node(BaseModel, ABC):
 
 
 class EpisodicNode(Node):
+    content_embedding: list[float] | None = Field(
+        default=None, description='embedding of the episode content'
+    )
+    content_embedding_model: str | None = Field(
+        default=None, description='identifier of the embedder used for content_embedding'
+    )
     source: EpisodeType = Field(description='source type')
     source_description: str = Field(description='description of the data source')
     content: str = Field(description='raw episode data')
@@ -323,6 +329,18 @@ class EpisodicNode(Node):
         description='list of entity edges referenced in this episode',
         default_factory=list,
     )
+
+    async def generate_content_embedding(self, embedder: EmbedderClient):
+        start = time()
+        text = self.content.replace('\n', ' ')
+        self.content_embedding = await embedder.create(input_data=[text])
+        self.content_embedding_model = _resolve_embedder_model_id(embedder)
+        end = time()
+        logger.debug(
+            f'embedded episode {self.uuid} content ({len(text)} chars) in {(end - start) * 1000} ms'
+        )
+
+        return self.content_embedding
 
     async def save(self, driver: GraphDriver):
         if driver.graph_operations_interface:
@@ -337,6 +355,8 @@ class EpisodicNode(Node):
             'group_id': self.group_id,
             'source_description': self.source_description,
             'content': self.content,
+            'content_embedding': self.content_embedding,
+            'content_embedding_model': self.content_embedding_model,
             'entity_edges': self.entity_edges,
             'created_at': self.created_at,
             'valid_at': self.valid_at,

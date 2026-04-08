@@ -43,6 +43,7 @@ COMBINED_HYBRID_SEARCH_RRF = SearchConfig(
     episode_config=EpisodeSearchConfig(
         search_methods=[
             EpisodeSearchMethod.bm25,
+            EpisodeSearchMethod.cosine_similarity,
         ],
         reranker=EpisodeReranker.rrf,
     ),
@@ -67,6 +68,7 @@ COMBINED_HYBRID_SEARCH_MMR = SearchConfig(
     episode_config=EpisodeSearchConfig(
         search_methods=[
             EpisodeSearchMethod.bm25,
+            EpisodeSearchMethod.cosine_similarity,
         ],
         reranker=EpisodeReranker.rrf,
     ),
@@ -98,6 +100,7 @@ COMBINED_HYBRID_SEARCH_CROSS_ENCODER = SearchConfig(
     episode_config=EpisodeSearchConfig(
         search_methods=[
             EpisodeSearchMethod.bm25,
+            EpisodeSearchMethod.cosine_similarity,
         ],
         reranker=EpisodeReranker.cross_encoder,
     ),

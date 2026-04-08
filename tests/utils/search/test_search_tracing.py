@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from graphiti_core.search.search import edge_search, search
-from graphiti_core.search.search_config import EdgeSearchConfig, EdgeSearchMethod, SearchConfig
+from graphiti_core.search.search_config import (
+    EdgeSearchConfig,
+    EdgeSearchMethod,
+    EpisodeSearchConfig,
+    EpisodeSearchMethod,
+    SearchConfig,
+)
 from graphiti_core.search.search_filters import SearchFilters
 
 
@@ -147,3 +153,44 @@ async def test_edge_search_uses_noop_tracer_when_none_is_passed(monkeypatch):
 
     assert edges == []
     assert scores == []
+
+
+@pytest.mark.asyncio
+async def test_search_emits_trace_spans_for_episode_similarity(monkeypatch):
+    async def fake_episode_similarity_search(*args, **kwargs):
+        return []
+
+    async def fake_embedder_create(*, input_data):
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(
+        'graphiti_core.search.search.episode_similarity_search',
+        fake_episode_similarity_search,
+    )
+
+    tracer = RecordingTracer()
+    clients = SimpleNamespace(
+        driver=SimpleNamespace(),
+        embedder=SimpleNamespace(create=fake_embedder_create),
+        cross_encoder=SimpleNamespace(),
+        tracer=tracer,
+    )
+
+    results = await search(
+        clients,
+        query='where is the episode',
+        group_ids=None,
+        config=SearchConfig(
+            episode_config=EpisodeSearchConfig(
+                search_methods=[EpisodeSearchMethod.cosine_similarity],
+            ),
+        ),
+        search_filter=SearchFilters(),
+    )
+
+    assert results.episodes == []
+    span_names = [span.name for span in tracer.spans]
+    assert 'search.embed_query_vector' in span_names
+    assert 'search.episode_search' in span_names
+    assert 'search.episode_search.execute_methods' in span_names
+    assert 'search.episode_search.rerank' in span_names

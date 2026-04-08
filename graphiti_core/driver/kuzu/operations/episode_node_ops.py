@@ -46,6 +46,8 @@ class KuzuEpisodeNodeOperations(EpisodeNodeOperations):
             'group_id': node.group_id,
             'source_description': node.source_description,
             'content': node.content,
+            'content_embedding': node.content_embedding,
+            'content_embedding_model': node.content_embedding_model,
             'entity_edges': node.entity_edges,
             'created_at': node.created_at,
             'valid_at': node.valid_at,

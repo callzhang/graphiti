@@ -157,6 +157,9 @@ async def add_nodes_and_edges_bulk_tx(
     embedder: EmbedderClient,
     driver: GraphDriver,
 ):
+    for episode_node in episodic_nodes:
+        if episode_node.content_embedding is None:
+            await episode_node.generate_content_embedding(embedder)
     episodes = [dict(episode) for episode in episodic_nodes]
     for episode in episodes:
         episode['source'] = str(episode['source'].value)

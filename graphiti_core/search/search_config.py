@@ -42,6 +42,7 @@ class NodeSearchMethod(Enum):
 
 
 class EpisodeSearchMethod(Enum):
+    cosine_similarity = 'cosine_similarity'
     bm25 = 'bm25'
 
 

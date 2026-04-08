@@ -448,6 +448,61 @@ class NeptuneSearchOperations(SearchOperations):
             """
             UNWIND $ids as i
             MATCH (e:Episodic)
+            WHERE id(e)=i.id
+            RETURN
+            """
+            + EPISODIC_NODE_RETURN_NEPTUNE
+            + """
+            ORDER BY i.score DESC
+            LIMIT $limit
+            """
+        )
+
+        records, _, _ = await executor.execute_query(
+            cypher,
+            ids=input_ids,
+            limit=limit,
+        )
+
+        return [episodic_node_from_record(r) for r in records]
+
+    async def episode_similarity_search(
+        self,
+        executor: QueryExecutor,
+        search_vector: list[float],
+        search_filter: SearchFilters,  # noqa: ARG002
+        group_ids: list[str] | None = None,
+        limit: int = 10,
+        min_score: float = 0.6,
+    ) -> list[EpisodicNode]:
+        if self._driver is None:
+            return []
+
+        cypher = """
+            MATCH (e:Episodic)
+            RETURN DISTINCT id(e) as id, e.content_embedding as embedding
+        """
+        records, _, _ = await executor.execute_query(cypher)
+        if len(records) == 0:
+            return []
+
+        input_ids = []
+        for record in records:
+            embedding = record.get('embedding')
+            if embedding:
+                score = calculate_cosine_similarity(
+                    search_vector, list(map(float, embedding.split(',')))
+                )
+                if score > min_score:
+                    input_ids.append({'id': record['id'], 'score': score})
+
+        if len(input_ids) == 0:
+            return []
+
+        cypher = (
+            """
+            UNWIND $ids as i
+            MATCH (e:Episodic)
             WHERE e.uuid=i.id
             RETURN
             """

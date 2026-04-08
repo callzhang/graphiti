@@ -101,6 +101,8 @@ def episodic_node_from_record(record: Any) -> EpisodicNode:
         group_id=record['group_id'],
         source=EpisodeType.from_str(record['source']),
         name=record['name'],
+        content_embedding=record.get('content_embedding'),
+        content_embedding_model=record.get('content_embedding_model'),
         source_description=record['source_description'],
         entity_edges=record['entity_edges'],
     )

@@ -60,6 +60,8 @@ SCHEMA_QUERIES = """
         source STRING,
         source_description STRING,
         content STRING,
+        content_embedding FLOAT[],
+        content_embedding_model STRING,
         valid_at TIMESTAMP,
         entity_edges STRING[]
     );

@@ -33,6 +33,8 @@ def get_episode_node_save_query(provider: GraphProvider) -> str:
             return """
                 MERGE (n:Episodic {uuid: $uuid})
                 SET n = {uuid: $uuid, name: $name, group_id: $group_id, source_description: $source_description, source: $source, content: $content,
+                content_embedding: join([x IN coalesce($content_embedding, []) | toString(x) ], ','),
+                content_embedding_model: $content_embedding_model,
                 entity_edges: join([x IN coalesce($entity_edges, []) | toString(x) ], '|'), created_at: $created_at, valid_at: $valid_at}
                 RETURN n.uuid AS uuid
             """
@@ -46,6 +48,8 @@ def get_episode_node_save_query(provider: GraphProvider) -> str:
                     n.source = $source,
                     n.source_description = $source_description,
                     n.content = $content,
+                    n.content_embedding = $content_embedding,
+                    n.content_embedding_model = $content_embedding_model,
                     n.valid_at = $valid_at,
                     n.entity_edges = $entity_edges
                 RETURN n.uuid AS uuid
@@ -54,14 +58,32 @@ def get_episode_node_save_query(provider: GraphProvider) -> str:
             return """
                 MERGE (n:Episodic {uuid: $uuid})
                 SET n = {uuid: $uuid, name: $name, group_id: $group_id, source_description: $source_description, source: $source, content: $content,
+                content_embedding: $content_embedding, content_embedding_model: $content_embedding_model,
                 entity_edges: $entity_edges, created_at: $created_at, valid_at: $valid_at}
                 RETURN n.uuid AS uuid
             """
         case _:  # Neo4j
+            save_embedding_query = """
+                CALL {
+                    WITH n
+                    WITH n
+                    WHERE $content_embedding IS NOT NULL
+                    CALL db.create.setNodeVectorProperty(n, "content_embedding", $content_embedding)
+                    RETURN 1 AS ignored
+                    UNION
+                    WITH n
+                    WITH n
+                    WHERE $content_embedding IS NULL
+                    RETURN 1 AS ignored
+                }
+            """
             return """
                 MERGE (n:Episodic {uuid: $uuid})
                 SET n = {uuid: $uuid, name: $name, group_id: $group_id, source_description: $source_description, source: $source, content: $content,
+                content_embedding_model: $content_embedding_model,
                 entity_edges: $entity_edges, created_at: $created_at, valid_at: $valid_at}
+                WITH n
+            """ + save_embedding_query + """
                 RETURN n.uuid AS uuid
             """
 
@@ -74,6 +96,8 @@ def get_episode_node_save_bulk_query(provider: GraphProvider) -> str:
                 MERGE (n:Episodic {uuid: episode.uuid})
                 SET n = {uuid: episode.uuid, name: episode.name, group_id: episode.group_id, source_description: episode.source_description,
                     source: episode.source, content: episode.content,
+                content_embedding: join([x IN coalesce(episode.content_embedding, []) | toString(x) ], ','),
+                content_embedding_model: episode.content_embedding_model,
                 entity_edges: join([x IN coalesce(episode.entity_edges, []) | toString(x) ], '|'), created_at: episode.created_at, valid_at: episode.valid_at}
                 RETURN n.uuid AS uuid
             """
@@ -87,6 +111,8 @@ def get_episode_node_save_bulk_query(provider: GraphProvider) -> str:
                     n.source = $source,
                     n.source_description = $source_description,
                     n.content = $content,
+                    n.content_embedding = $content_embedding,
+                    n.content_embedding_model = $content_embedding_model,
                     n.valid_at = $valid_at,
                     n.entity_edges = $entity_edges
                 RETURN n.uuid AS uuid
@@ -96,15 +122,33 @@ def get_episode_node_save_bulk_query(provider: GraphProvider) -> str:
                 UNWIND $episodes AS episode
                 MERGE (n:Episodic {uuid: episode.uuid})
                 SET n = {uuid: episode.uuid, name: episode.name, group_id: episode.group_id, source_description: episode.source_description, source: episode.source, content: episode.content, 
+                content_embedding: episode.content_embedding, content_embedding_model: episode.content_embedding_model,
                 entity_edges: episode.entity_edges, created_at: episode.created_at, valid_at: episode.valid_at}
                 RETURN n.uuid AS uuid
             """
         case _:  # Neo4j
+            save_embedding_query = """
+                CALL {
+                    WITH n, episode
+                    WITH n, episode
+                    WHERE episode.content_embedding IS NOT NULL
+                    CALL db.create.setNodeVectorProperty(n, "content_embedding", episode.content_embedding)
+                    RETURN 1 AS ignored
+                    UNION
+                    WITH n, episode
+                    WITH n, episode
+                    WHERE episode.content_embedding IS NULL
+                    RETURN 1 AS ignored
+                }
+            """
             return """
                 UNWIND $episodes AS episode
                 MERGE (n:Episodic {uuid: episode.uuid})
                 SET n = {uuid: episode.uuid, name: episode.name, group_id: episode.group_id, source_description: episode.source_description, source: episode.source, content: episode.content, 
+                content_embedding_model: episode.content_embedding_model,
                 entity_edges: episode.entity_edges, created_at: episode.created_at, valid_at: episode.valid_at}
+                WITH n, episode
+            """ + save_embedding_query + """
                 RETURN n.uuid AS uuid
             """
 
@@ -117,6 +161,8 @@ EPISODIC_NODE_RETURN = """
     e.source AS source,
     e.source_description AS source_description,
     e.content AS content,
+    e.content_embedding AS content_embedding,
+    e.content_embedding_model AS content_embedding_model,
     e.valid_at AS valid_at,
     e.entity_edges AS entity_edges
 """
@@ -130,6 +176,8 @@ EPISODIC_NODE_RETURN_NEPTUNE = """
     e.group_id AS group_id,
     e.source_description AS source_description,
     e.source AS source,
+    [x IN split(e.content_embedding, ",") | toFloat(x)] AS content_embedding,
+    e.content_embedding_model AS content_embedding_model,
     split(e.entity_edges, ",") AS entity_edges
 """
 

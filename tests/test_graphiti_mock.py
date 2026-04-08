@@ -33,6 +33,7 @@ from graphiti_core.search.search_utils import (
     edge_fulltext_search,
     edge_similarity_search,
     episode_fulltext_search,
+    episode_similarity_search,
     episode_mentions_reranker,
     get_communities_by_nodes,
     get_edge_invalidation_candidates,
@@ -1551,6 +1552,53 @@ async def test_episode_fulltext_search(
         group_ids=[group_id],
     )
     assert len(nodes) == 1
+    assert nodes[0].name == episodic_node_1.name
+
+
+@pytest.mark.asyncio
+async def test_episode_similarity_search(
+    graph_driver, mock_embedder, mock_llm_client, mock_cross_encoder_client
+):
+    graphiti = Graphiti(
+        graph_driver=graph_driver,
+        llm_client=mock_llm_client,
+        embedder=mock_embedder,
+        cross_encoder=mock_cross_encoder_client,
+    )
+    await graphiti.build_indices_and_constraints()
+
+    episodic_node_1 = EpisodicNode(
+        name='test_episodic_1',
+        content='Alice',
+        created_at=datetime.now(),
+        valid_at=datetime.now(),
+        group_id=group_id,
+        source=EpisodeType.message,
+        source_description='Description about Alice',
+    )
+    episodic_node_2 = EpisodicNode(
+        name='test_episodic_2',
+        content='Bob',
+        created_at=datetime.now(),
+        valid_at=datetime.now(),
+        group_id=group_id,
+        source=EpisodeType.message,
+        source_description='Description about Finance',
+    )
+
+    await episodic_node_1.generate_content_embedding(mock_embedder)
+    await episodic_node_2.generate_content_embedding(mock_embedder)
+    await episodic_node_1.save(graph_driver)
+    await episodic_node_2.save(graph_driver)
+
+    query_vector = await mock_embedder.create(input_data=['Alice'])
+    nodes = await episode_similarity_search(
+        graph_driver,
+        query_vector,
+        SearchFilters(node_labels=['Episodic']),
+        group_ids=[group_id],
+    )
+    assert len(nodes) >= 1
     assert nodes[0].name == episodic_node_1.name
 
 

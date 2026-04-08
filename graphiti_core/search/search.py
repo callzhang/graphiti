@@ -41,6 +41,7 @@ from graphiti_core.search.search_config import (
     EdgeSearchMethod,
     EpisodeReranker,
     EpisodeSearchConfig,
+    EpisodeSearchMethod,
     NodeReranker,
     NodeSearchConfig,
     NodeSearchMethod,
@@ -57,6 +58,7 @@ from graphiti_core.search.search_utils import (
     edge_similarity_search,
     entity_anchored_edge_search,
     episode_fulltext_search,
+    episode_similarity_search,
     multi_hop_edge_search,
     episode_mentions_reranker,
     get_embeddings_for_communities,
@@ -172,6 +174,10 @@ async def search(
             and NodeSearchMethod.cosine_similarity in config.node_config.search_methods
         )
         or (config.node_config and NodeReranker.mmr == config.node_config.reranker)
+        or (
+            config.episode_config
+            and EpisodeSearchMethod.cosine_similarity in config.episode_config.search_methods
+        )
         or (
             config.community_config
             and CommunitySearchMethod.cosine_similarity in config.community_config.search_methods
@@ -771,13 +777,23 @@ async def episode_search(
             'search.episode_search.execute_methods',
             {'candidate_limit': 2 * limit},
         ):
-            search_results: list[list[EpisodicNode]] = list(
-                await semaphore_gather(
-                    *[
-                        episode_fulltext_search(driver, query, search_filter, group_ids, 2 * limit),
-                    ]
+            search_tasks = []
+            if EpisodeSearchMethod.bm25 in config.search_methods:
+                search_tasks.append(
+                    episode_fulltext_search(driver, query, search_filter, group_ids, 2 * limit)
                 )
-            )
+            if EpisodeSearchMethod.cosine_similarity in config.search_methods:
+                search_tasks.append(
+                    episode_similarity_search(
+                        driver,
+                        _query_vector,
+                        search_filter,
+                        group_ids,
+                        2 * limit,
+                        config.sim_min_score,
+                    )
+                )
+            search_results: list[list[EpisodicNode]] = list(await semaphore_gather(*search_tasks))
 
         search_result_uuids = [[episode.uuid for episode in result] for result in search_results]
         episode_uuid_map = {

@@ -106,6 +106,17 @@ class SearchOperations(ABC):
         limit: int = 10,
     ) -> list[EpisodicNode]: ...
 
+    @abstractmethod
+    async def episode_similarity_search(
+        self,
+        executor: QueryExecutor,
+        search_vector: list[float],
+        search_filter: SearchFilters,
+        group_ids: list[str] | None = None,
+        limit: int = 10,
+        min_score: float = 0.6,
+    ) -> list[EpisodicNode]: ...
+
     # Community search
 
     @abstractmethod

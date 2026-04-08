@@ -1255,6 +1255,109 @@ async def episode_fulltext_search(
     return episodes
 
 
+async def episode_similarity_search(
+    driver: GraphDriver,
+    search_vector: list[float],
+    _search_filter: SearchFilters,
+    group_ids: list[str] | None = None,
+    limit=RELEVANT_SCHEMA_LIMIT,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[EpisodicNode]:
+    if driver.search_interface:
+        return await driver.search_interface.episode_similarity_search(
+            driver, search_vector, _search_filter, group_ids, limit, min_score
+        )
+
+    filter_params: dict[str, Any] = {}
+    group_filter_query: LiteralString = ''
+    if group_ids is not None:
+        group_filter_query += '\nAND e.group_id IN $group_ids'
+        filter_params['group_ids'] = group_ids
+
+    search_vector_var = '$search_vector'
+    if driver.provider == GraphProvider.KUZU:
+        search_vector_var = f'CAST($search_vector AS FLOAT[{len(search_vector)}])'
+
+    if driver.provider == GraphProvider.NEPTUNE:
+        query = """
+            MATCH (e:Episodic)
+            RETURN DISTINCT id(e) as id, e.content_embedding as embedding
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
+
+        if len(records) == 0:
+            return []
+
+        input_ids = []
+        for record in records:
+            embedding = record.get('embedding')
+            if embedding:
+                score = calculate_cosine_similarity(
+                    search_vector, list(map(float, embedding.split(',')))
+                )
+                if score > min_score:
+                    input_ids.append({'id': record['id'], 'score': score})
+
+        if len(input_ids) == 0:
+            return []
+
+        query = """
+            UNWIND $ids as i
+            MATCH (e:Episodic)
+            WHERE id(e) = i.id
+            RETURN
+        """ + EPISODIC_NODE_RETURN_NEPTUNE + """
+            ORDER BY i.score DESC
+            LIMIT $limit
+        """
+        records, _, _ = await driver.execute_query(
+            query,
+            ids=input_ids,
+            limit=limit,
+            routing_='r',
+            **filter_params,
+        )
+    else:
+        query = (
+            """
+            MATCH (e:Episodic)
+            WHERE e.content_embedding IS NOT NULL
+            """
+            + group_filter_query
+            + """
+            WITH e, """
+            + get_vector_cosine_func_query(
+                'e.content_embedding', search_vector_var, driver.provider
+            )
+            + """ AS score
+            WHERE score > $min_score
+            RETURN
+            """
+            + EPISODIC_NODE_RETURN
+            + """
+            ORDER BY score DESC
+            LIMIT $limit
+            """
+        )
+        records, _, _ = await driver.execute_query(
+            query,
+            search_vector=search_vector,
+            limit=limit,
+            min_score=min_score,
+            routing_='r',
+            **filter_params,
+        )
+
+    return [get_episodic_node_from_record(record) for record in records]
+
+
 async def community_fulltext_search(
     driver: GraphDriver,
     query: str,

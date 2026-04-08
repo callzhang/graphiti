@@ -276,7 +276,15 @@ The quickstart demonstrates:
 3. Adding episodes to the graph (both text and structured JSON)
 4. Searching for relationships (edges) using hybrid search
 5. Reranking search results using graph distance
-6. Searching for nodes using predefined search recipes
+6. Searching for nodes and episodes using predefined hybrid search recipes
+
+Episode retrieval now uses the same hybrid pattern as entity/community retrieval:
+- `bm25` for exact lexical matches on `Episodic.content` / `source_description`
+- `cosine_similarity` over `Episodic.content_embedding` for semantic recall
+- `rrf` or `cross_encoder` on the merged candidate set
+
+This retrieval embedding is separate from any application-level dedup embedding. Retrieval should optimize semantic
+search quality; dedup should optimize near-duplicate detection.
 
 The example is fully documented with clear explanations of each functionality and includes a comprehensive README with
 setup instructions and next steps.

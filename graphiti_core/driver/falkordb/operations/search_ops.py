@@ -483,6 +483,54 @@ class FalkorSearchOperations(SearchOperations):
 
         return [episodic_node_from_record(r) for r in records]
 
+    async def episode_similarity_search(
+        self,
+        executor: QueryExecutor,
+        search_vector: list[float],
+        search_filter: SearchFilters,  # noqa: ARG002
+        group_ids: list[str] | None = None,
+        limit: int = 10,
+        min_score: float = 0.6,
+    ) -> list[EpisodicNode]:
+        filter_params: dict[str, Any] = {}
+        group_filter_query = ''
+        if group_ids is not None:
+            group_filter_query += '\nAND e.group_id IN $group_ids'
+            filter_params['group_ids'] = group_ids
+
+        cypher = (
+            """
+            MATCH (e:Episodic)
+            WHERE e.content_embedding IS NOT NULL
+            """
+            + group_filter_query
+            + """
+            WITH e,
+            """
+            + get_vector_cosine_func_query(
+                'e.content_embedding', '$search_vector', GraphProvider.FALKORDB
+            )
+            + """ AS score
+            WHERE score > $min_score
+            RETURN
+            """
+            + EPISODIC_NODE_RETURN
+            + """
+            ORDER BY score DESC
+            LIMIT $limit
+            """
+        )
+
+        records, _, _ = await executor.execute_query(
+            cypher,
+            search_vector=search_vector,
+            limit=limit,
+            min_score=min_score,
+            **filter_params,
+        )
+
+        return [episodic_node_from_record(r) for r in records]
+
     # --- Community search ---
 
     async def community_fulltext_search(
