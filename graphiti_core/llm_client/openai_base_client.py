@@ -119,8 +119,6 @@ class BaseOpenAIClient(LLMClient):
         Returns:
             tuple: (parsed_response, input_tokens, output_tokens)
         """
-        response_object = response.output_text
-
         # Extract token usage
         input_tokens = 0
         output_tokens = 0
@@ -128,8 +126,13 @@ class BaseOpenAIClient(LLMClient):
             input_tokens = getattr(response.usage, 'input_tokens', 0) or 0
             output_tokens = getattr(response.usage, 'output_tokens', 0) or 0
 
-        if response_object:
-            return json.loads(response_object), input_tokens, output_tokens
+        parsed_object = getattr(response, 'output_parsed', None)
+        if parsed_object is not None:
+            if isinstance(parsed_object, BaseModel):
+                return parsed_object.model_dump(), input_tokens, output_tokens
+            if isinstance(parsed_object, dict):
+                return parsed_object, input_tokens, output_tokens
+            raise Exception(f'Invalid parsed structured response from LLM: {parsed_object!r}')
         elif hasattr(response, 'refusal') and response.refusal:
             raise RefusalError(response.refusal)
         else:
