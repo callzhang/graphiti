@@ -121,6 +121,10 @@ def _edge_method_name(method: EdgeSearchMethod) -> str:
     return mapping.get(method, str(getattr(method, "value", method)))
 
 
+def _rrf_contribution(rank: int) -> float:
+    return 1 / rank
+
+
 def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, 'value') else value
 
@@ -131,6 +135,155 @@ def _resolve_tracer(search_tracer: Tracer | None) -> Tracer:
 
 def _supports_graph_native_edge_search(driver: GraphDriver) -> bool:
     return getattr(driver, 'provider', None) == GraphProvider.NEO4J
+
+
+def _build_rrf_score_tree(detail: dict[str, Any]) -> dict[str, Any]:
+    methods = detail.get("methods") or {}
+    method_terms: list[dict[str, Any]] = []
+    base_expression_terms: list[str] = []
+    base_children: list[dict[str, Any]] = []
+
+    for method_name, method_detail in methods.items():
+        rank = int(method_detail.get("rank") or 0)
+        if rank <= 0:
+            continue
+        weight = float(method_detail.get("weight") or 1.0)
+        signal = float(method_detail.get("rrf_contribution") or _rrf_contribution(rank))
+        term_value = weight * signal
+        term_symbol = f"term_{method_name}"
+        signal_symbol = f"signal_{method_name}"
+        weight_symbol = f"weight_{method_name}"
+        rank_symbol = f"rank_{method_name}"
+        base_expression_terms.append(term_symbol)
+        base_children.append(
+            {
+                "symbol": term_symbol,
+                "value": round(term_value, 6),
+                "equation": f"{term_symbol} = {weight_symbol} * {signal_symbol}",
+                "children": [
+                    {"symbol": weight_symbol, "value": round(weight, 6)},
+                    {
+                        "symbol": signal_symbol,
+                        "value": round(signal, 6),
+                        "equation": f"{signal_symbol} = 1 / {rank_symbol}",
+                        "children": [
+                            {"symbol": rank_symbol, "value": rank},
+                        ],
+                    },
+                ],
+            }
+        )
+        method_terms.append(
+            {
+                "method": method_name,
+                "equations": {
+                    "term": f"{term_symbol} = {weight_symbol} * {signal_symbol}",
+                    "signal": f"{signal_symbol} = 1 / {rank_symbol}",
+                },
+                "variables": {
+                    rank_symbol: rank,
+                    weight_symbol: round(weight, 6),
+                    signal_symbol: round(signal, 6),
+                    term_symbol: round(term_value, 6),
+                },
+            }
+        )
+
+    base_score = float(detail.get("pre_recency_score") or 0.0)
+    lambda_recency = float(detail.get("recency_weight") or 0.0)
+    ranking_score = float(detail.get("final_score") or 0.0)
+    base_expression = " + ".join(base_expression_terms) if base_expression_terms else "0"
+
+    return {
+        "model": "rrf_with_recency_decay",
+        "equations": {
+            "ranking_score": "ranking_score = lambda_recency * base_score",
+            "base_score": f"base_score = {base_expression}",
+            "method_term": "term_method = weight_method * signal_method",
+            "method_signal": "signal_method = 1 / rank_method",
+        },
+        "variables": {
+            "ranking_score": round(ranking_score, 6),
+            "lambda_recency": round(lambda_recency, 6),
+            "base_score": round(base_score, 6),
+            "final_rank": detail.get("final_rank"),
+        },
+        "method_terms": method_terms,
+        "tree": {
+            "symbol": "ranking_score",
+            "value": round(ranking_score, 6),
+            "equation": "ranking_score = lambda_recency * base_score",
+            "children": [
+                {"symbol": "lambda_recency", "value": round(lambda_recency, 6)},
+                {
+                    "symbol": "base_score",
+                    "value": round(base_score, 6),
+                    "equation": f"base_score = {base_expression}",
+                    "children": base_children,
+                },
+            ],
+        },
+    }
+
+
+def _build_generic_score_tree(detail: dict[str, Any]) -> dict[str, Any]:
+    base_score = float(detail.get("pre_recency_score") or 0.0)
+    lambda_recency = float(detail.get("recency_weight") or 0.0)
+    ranking_score = float(detail.get("final_score") or 0.0)
+    methods = detail.get("methods") or {}
+    method_terms = []
+    for method_name, method_detail in methods.items():
+        rank = method_detail.get("rank")
+        method_terms.append(
+            {
+                "method": method_name,
+                "equations": {
+                    "rank_observation": f"rank_{method_name} = observed backend rank",
+                },
+                "variables": {
+                    f"rank_{method_name}": rank,
+                },
+            }
+        )
+    return {
+        "model": "generic_reranker_with_recency_decay",
+        "equations": {
+            "ranking_score": "ranking_score = lambda_recency * base_score",
+            "base_score": "base_score = backend_reranker_output",
+        },
+        "variables": {
+            "ranking_score": round(ranking_score, 6),
+            "lambda_recency": round(lambda_recency, 6),
+            "base_score": round(base_score, 6),
+            "final_rank": detail.get("final_rank"),
+        },
+        "method_terms": method_terms,
+        "tree": {
+            "symbol": "ranking_score",
+            "value": round(ranking_score, 6),
+            "equation": "ranking_score = lambda_recency * base_score",
+            "children": [
+                {"symbol": "lambda_recency", "value": round(lambda_recency, 6)},
+                {
+                    "symbol": "base_score",
+                    "value": round(base_score, 6),
+                    "equation": "base_score = backend_reranker_output",
+                },
+            ],
+        },
+    }
+
+
+def _attach_edge_score_formula_trees(
+    edge_score_details: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    for detail in edge_score_details.values():
+        reranker = str(detail.get("reranker") or "")
+        if reranker == EdgeReranker.rrf.value:
+            detail["score_formula"] = _build_rrf_score_tree(detail)
+            continue
+        detail["score_formula"] = _build_generic_score_tree(detail)
+    return edge_score_details
 
 
 @contextmanager
@@ -478,9 +631,9 @@ async def edge_search(
                         "methods": {},
                     },
                 )
-                method_detail: dict[str, Any] = {"rank": index}
+                method_detail: dict[str, Any] = {"rank": index, "weight": 1.0}
                 if config.reranker == EdgeReranker.rrf:
-                    method_detail["rrf_contribution"] = 1 / index
+                    method_detail["rrf_contribution"] = _rrf_contribution(index)
                 detail["methods"][method_name] = method_detail
 
         reranked_uuids: list[str] = []
@@ -605,6 +758,7 @@ async def edge_search(
             detail["recency_weight"] = _recency_weight(ts)
             detail["final_score"] = float(score)
             detail["final_rank"] = final_rank
+        _attach_edge_score_formula_trees(edge_score_details)
         return final_edges, final_scores, edge_score_details
 
 
