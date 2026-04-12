@@ -426,11 +426,10 @@ async def edge_similarity_search(
         # Over-fetch to compensate for post-filtering by group_id/expired_at.
         over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
-        filter_parts = []
+        filter_parts = list(filter_queries)
         if group_ids is not None:
             filter_parts.append('e.group_id IN $group_ids')
             filter_params['group_ids'] = group_ids
-        filter_parts.append('e.expired_at IS NULL')
         if source_node_uuid is not None:
             filter_parts.append('n.uuid = $source_uuid')
             filter_params['source_uuid'] = source_node_uuid
@@ -595,6 +594,11 @@ async def multi_hop_edge_search(
     if group_ids is not None:
         where_parts.append('hop.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
+    edge_filter_queries, edge_filter_params = edge_search_filter_query_constructor(
+        search_filter, driver.provider
+    )
+    where_parts.extend(edge_filter_queries)
+    filter_params.update(edge_filter_params)
 
     where_clause = ' AND '.join(where_parts)
 
@@ -661,6 +665,11 @@ async def community_aware_edge_search(
     if group_ids is not None:
         where_parts.append('member.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
+    edge_filter_queries, edge_filter_params = edge_search_filter_query_constructor(
+        search_filter, driver.provider
+    )
+    where_parts.extend(edge_filter_queries)
+    filter_params.update(edge_filter_params)
 
     where_clause = ' AND '.join(where_parts)
 
