@@ -112,6 +112,15 @@ def _rerank_edges_with_recency(
     return [p[1] for p in pairs], [p[0] for p in pairs]
 
 
+def _edge_method_name(method: EdgeSearchMethod) -> str:
+    mapping = {
+        EdgeSearchMethod.bm25: "bm25",
+        EdgeSearchMethod.cosine_similarity: "cosine_similarity",
+        EdgeSearchMethod.bfs: "breadth_first_search",
+    }
+    return mapping.get(method, str(getattr(method, "value", method)))
+
+
 def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, 'value') else value
 
@@ -217,7 +226,7 @@ async def search(
         },
     ) as span:
         (
-            (edges, edge_reranker_scores),
+            (edges, edge_reranker_scores, edge_score_details),
             (nodes, node_reranker_scores),
             (episodes, episode_reranker_scores),
             (communities, community_reranker_scores),
@@ -286,6 +295,7 @@ async def search(
     results = SearchResults(
         edges=edges,
         edge_reranker_scores=edge_reranker_scores,
+        edge_score_details=edge_score_details,
         nodes=nodes,
         node_reranker_scores=node_reranker_scores,
         episodes=episodes,
@@ -316,7 +326,7 @@ async def edge_search(
     search_tracer: Tracer | None = None,
 ) -> tuple[list[EntityEdge], list[float]]:
     if config is None:
-        return [], []
+        return [], [], {}
     search_tracer = _resolve_tracer(search_tracer)
 
     with _trace_phase(
@@ -331,33 +341,39 @@ async def edge_search(
         },
     ) as span:
         # Build search tasks based on configured search methods
-        search_tasks = []
+        search_tasks: list[tuple[str, Any]] = []
         if EdgeSearchMethod.bm25 in config.search_methods:
             search_tasks.append(
-                edge_fulltext_search(driver, query, search_filter, group_ids, 2 * limit)
+                (_edge_method_name(EdgeSearchMethod.bm25), edge_fulltext_search(driver, query, search_filter, group_ids, 2 * limit))
             )
         if EdgeSearchMethod.cosine_similarity in config.search_methods:
             search_tasks.append(
-                edge_similarity_search(
-                    driver,
-                    query_vector,
-                    None,
-                    None,
-                    search_filter,
-                    group_ids,
-                    2 * limit,
-                    config.sim_min_score,
+                (
+                    _edge_method_name(EdgeSearchMethod.cosine_similarity),
+                    edge_similarity_search(
+                        driver,
+                        query_vector,
+                        None,
+                        None,
+                        search_filter,
+                        group_ids,
+                        2 * limit,
+                        config.sim_min_score,
+                    ),
                 )
             )
         if EdgeSearchMethod.bfs in config.search_methods:
             search_tasks.append(
-                edge_bfs_search(
-                    driver,
-                    bfs_origin_node_uuids,
-                    config.bfs_max_depth,
-                    search_filter,
-                    group_ids,
-                    2 * limit,
+                (
+                    _edge_method_name(EdgeSearchMethod.bfs),
+                    edge_bfs_search(
+                        driver,
+                        bfs_origin_node_uuids,
+                        config.bfs_max_depth,
+                        search_filter,
+                        group_ids,
+                        2 * limit,
+                    ),
                 )
             )
         if (
@@ -365,38 +381,48 @@ async def edge_search(
             and _supports_graph_native_edge_search(driver)
         ):
             search_tasks.append(
-                entity_anchored_edge_search(
-                    driver,
-                    query_vector,
-                    search_filter,
-                    group_ids,
-                    2 * limit,
-                    config.sim_min_score,
+                (
+                    "entity_anchored",
+                    entity_anchored_edge_search(
+                        driver,
+                        query_vector,
+                        search_filter,
+                        group_ids,
+                        2 * limit,
+                        config.sim_min_score,
+                    ),
                 )
             )
             search_tasks.append(
-                multi_hop_edge_search(
-                    driver,
-                    query_vector,
-                    search_filter,
-                    group_ids,
-                    limit,
-                    config.sim_min_score,
+                (
+                    "multi_hop",
+                    multi_hop_edge_search(
+                        driver,
+                        query_vector,
+                        search_filter,
+                        group_ids,
+                        limit,
+                        config.sim_min_score,
+                    ),
                 )
             )
             search_tasks.append(
-                community_aware_edge_search(
-                    driver,
-                    query_vector,
-                    search_filter,
-                    group_ids,
-                    limit,
-                    config.sim_min_score,
+                (
+                    "community_aware",
+                    community_aware_edge_search(
+                        driver,
+                        query_vector,
+                        search_filter,
+                        group_ids,
+                        limit,
+                        config.sim_min_score,
+                    ),
                 )
             )
 
         # Execute only the configured search methods
         search_results: list[list[EntityEdge]] = []
+        method_results: list[tuple[str, list[EntityEdge]]] = []
         if search_tasks:
             with _trace_phase(
                 search_tracer,
@@ -406,7 +432,10 @@ async def edge_search(
                     'candidate_limit': 2 * limit,
                 },
             ) as method_span:
-                search_results = list(await semaphore_gather(*search_tasks))
+                labels = [label for label, _ in search_tasks]
+                raw_results = list(await semaphore_gather(*[task for _, task in search_tasks]))
+                method_results = list(zip(labels, raw_results, strict=False))
+                search_results = [result for _, result in method_results]
                 method_span.add_attributes(
                     {
                         'result_set_count': len(search_results),
@@ -436,8 +465,23 @@ async def edge_search(
                         2 * limit,
                     )
                 )
+                method_results.append(("breadth_first_search_expanded", search_results[-1]))
 
         edge_uuid_map = {edge.uuid: edge for result in search_results for edge in result}
+        edge_score_details: dict[str, dict[str, Any]] = {}
+        for method_name, result in method_results:
+            for index, edge in enumerate(result, start=1):
+                detail = edge_score_details.setdefault(
+                    edge.uuid,
+                    {
+                        "reranker": _enum_value(config.reranker),
+                        "methods": {},
+                    },
+                )
+                method_detail: dict[str, Any] = {"rank": index}
+                if config.reranker == EdgeReranker.rrf:
+                    method_detail["rrf_contribution"] = 1 / index
+                detail["methods"][method_name] = method_detail
 
         reranked_uuids: list[str] = []
         edge_scores: list[float] = []
@@ -530,6 +574,10 @@ async def edge_search(
                     reranked_uuids.extend(source_to_edge_uuid_map[node_uuid])
 
         reranked_edges = [edge_uuid_map[uuid] for uuid in reranked_uuids]
+        pre_recency_scores = {
+            edge.uuid: float(score)
+            for edge, score in zip(reranked_edges, edge_scores, strict=False)
+        }
 
         if config.reranker == EdgeReranker.episode_mentions:
             reranked_edges.sort(reverse=True, key=lambda edge: len(edge.episodes))
@@ -545,7 +593,19 @@ async def edge_search(
         reranked_edges, edge_scores = _rerank_edges_with_recency(
             reranked_edges[: 2 * limit], edge_scores[: 2 * limit]
         )
-        return reranked_edges[:limit], edge_scores[:limit]
+        final_edges = reranked_edges[:limit]
+        final_scores = edge_scores[:limit]
+        for final_rank, (edge, score) in enumerate(zip(final_edges, final_scores, strict=False), start=1):
+            detail = edge_score_details.setdefault(
+                edge.uuid,
+                {"reranker": _enum_value(config.reranker), "methods": {}},
+            )
+            ts = getattr(edge, 'created_at', None) or getattr(edge, 'valid_at', None)
+            detail["pre_recency_score"] = pre_recency_scores.get(edge.uuid)
+            detail["recency_weight"] = _recency_weight(ts)
+            detail["final_score"] = float(score)
+            detail["final_rank"] = final_rank
+        return final_edges, final_scores, edge_score_details
 
 
 async def node_search(

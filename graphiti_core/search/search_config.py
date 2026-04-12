@@ -122,6 +122,7 @@ class SearchConfig(BaseModel):
 class SearchResults(BaseModel):
     edges: list[EntityEdge] = Field(default_factory=list)
     edge_reranker_scores: list[float] = Field(default_factory=list)
+    edge_score_details: dict[str, dict] = Field(default_factory=dict)
     nodes: list[EntityNode] = Field(default_factory=list)
     node_reranker_scores: list[float] = Field(default_factory=list)
     episodes: list[EpisodicNode] = Field(default_factory=list)
@@ -151,6 +152,7 @@ class SearchResults(BaseModel):
         for result in results_list:
             merged.edges.extend(result.edges)
             merged.edge_reranker_scores.extend(result.edge_reranker_scores)
+            merged.edge_score_details.update(result.edge_score_details)
             merged.nodes.extend(result.nodes)
             merged.node_reranker_scores.extend(result.node_reranker_scores)
             merged.episodes.extend(result.episodes)
