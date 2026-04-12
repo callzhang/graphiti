@@ -215,8 +215,11 @@ async def edge_fulltext_search(
         search_filter, driver.provider
     )
 
-    # Exclude expired/invalidated edges from fulltext results
-    filter_queries.append('e.invalid_at IS NULL')
+    # Default: exclude invalidated edges.  When the caller passes explicit
+    # invalid_at filters (e.g. for a historical time-point query), skip the
+    # blanket hard-filter so those bounds can take effect instead.
+    if search_filter.invalid_at is None:
+        filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -334,9 +337,10 @@ async def edge_similarity_search(
         search_filter, driver.provider
     )
 
-    # Exclude expired/invalidated edges — temporal KG keeps them for history
-    # but search should only return currently-valid facts.
-    filter_queries.append('e.invalid_at IS NULL')
+    # Default: exclude invalidated edges.  Skip when caller provides explicit
+    # invalid_at temporal bounds (historical queries).
+    if search_filter.invalid_at is None:
+        filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -514,18 +518,23 @@ async def entity_anchored_edge_search(
 
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
-    filter_parts = ['e.invalid_at IS NULL']
+    filter_parts: list[str] = []
     filter_params: dict[str, Any] = {}
-    if group_ids is not None:
-        filter_parts.append('entity.group_id IN $group_ids')
-        filter_params['group_ids'] = group_ids
 
-    # Add search filter conditions
+    # Add search filter conditions (may include explicit invalid_at bounds)
     edge_filter_queries, edge_filter_params = edge_search_filter_query_constructor(
         search_filter, driver.provider
     )
     filter_parts.extend(edge_filter_queries)
     filter_params.update(edge_filter_params)
+
+    # Default hard-filter; skip when caller provides temporal bounds.
+    if search_filter.invalid_at is None:
+        filter_parts.append('e.invalid_at IS NULL')
+
+    if group_ids is not None:
+        filter_parts.append('entity.group_id IN $group_ids')
+        filter_params['group_ids'] = group_ids
 
     where_clause = ' AND '.join(filter_parts)
 
@@ -587,7 +596,7 @@ async def multi_hop_edge_search(
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
     filter_params: dict[str, Any] = {}
-    where_parts = ['e.invalid_at IS NULL']
+    where_parts: list[str] = []
     if group_ids is not None:
         where_parts.append('hop.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -596,6 +605,8 @@ async def multi_hop_edge_search(
     )
     where_parts.extend(edge_filter_queries)
     filter_params.update(edge_filter_params)
+    if search_filter.invalid_at is None:
+        where_parts.append('e.invalid_at IS NULL')
 
     where_clause = ' AND '.join(where_parts)
 
@@ -657,7 +668,7 @@ async def community_aware_edge_search(
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
     filter_params: dict[str, Any] = {}
-    where_parts = ['e.invalid_at IS NULL']
+    where_parts: list[str] = []
     if group_ids is not None:
         where_parts.append('member.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -666,6 +677,8 @@ async def community_aware_edge_search(
     )
     where_parts.extend(edge_filter_queries)
     filter_params.update(edge_filter_params)
+    if search_filter.invalid_at is None:
+        where_parts.append('e.invalid_at IS NULL')
 
     where_clause = ' AND '.join(where_parts)
 
@@ -730,8 +743,9 @@ async def edge_bfs_search(
         search_filter, driver.provider
     )
 
-    # Exclude expired/invalidated edges from BFS traversal
-    filter_queries.append('e.invalid_at IS NULL')
+    # Default: exclude invalidated edges.  Skip when caller provides temporal bounds.
+    if search_filter.invalid_at is None:
+        filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
