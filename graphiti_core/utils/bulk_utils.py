@@ -202,7 +202,6 @@ async def add_nodes_and_edges_bulk_tx(
             'group_id': edge.group_id,
             'episodes': edge.episodes,
             'created_at': edge.created_at,
-            'expired_at': edge.expired_at,
             'valid_at': edge.valid_at,
             'invalid_at': edge.invalid_at,
             'fact_embedding': edge.fact_embedding,

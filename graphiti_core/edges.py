@@ -271,9 +271,6 @@ class EntityEdge(Edge):
         default=[],
         description='list of episode ids that reference these entity edges',
     )
-    expired_at: datetime | None = Field(
-        default=None, description='datetime of when the node was invalidated'
-    )
     valid_at: datetime | None = Field(
         default=None, description='datetime of when the fact became true'
     )
@@ -354,7 +351,6 @@ class EntityEdge(Edge):
             'fact_embedding_model': self.fact_embedding_model,
             'episodes': self.episodes,
             'created_at': self.created_at,
-            'expired_at': self.expired_at,
             'valid_at': self.valid_at,
             'invalid_at': self.invalid_at,
             'reference_time': self.reference_time,
@@ -985,7 +981,6 @@ def get_entity_edge_from_record(record: Any, provider: GraphProvider) -> EntityE
         attributes.pop('group_id', None)
         attributes.pop('episodes', None)
         attributes.pop('created_at', None)
-        attributes.pop('expired_at', None)
         attributes.pop('valid_at', None)
         attributes.pop('invalid_at', None)
         attributes.pop('reference_time', None)
@@ -1001,7 +996,6 @@ def get_entity_edge_from_record(record: Any, provider: GraphProvider) -> EntityE
         group_id=record['group_id'],
         episodes=episodes,
         created_at=parse_db_date(record['created_at']),  # type: ignore
-        expired_at=parse_db_date(record['expired_at']),
         valid_at=parse_db_date(record['valid_at']),
         invalid_at=parse_db_date(record['invalid_at']),
         reference_time=parse_db_date(record.get('reference_time')),

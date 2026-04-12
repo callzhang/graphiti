@@ -348,7 +348,6 @@ class NeptuneSearchOperations(SearchOperations):
                 r.name AS name,
                 r.fact AS fact,
                 split(r.episodes, ",") AS episodes,
-                r.expired_at AS expired_at,
                 r.valid_at AS valid_at,
                 r.invalid_at AS invalid_at,
                 properties(r) AS attributes
@@ -406,7 +405,6 @@ class NeptuneSearchOperations(SearchOperations):
                 e.name AS name,
                 e.fact AS fact,
                 split(e.episodes, ',') AS episodes,
-                e.expired_at AS expired_at,
                 e.valid_at AS valid_at,
                 e.invalid_at AS invalid_at,
                 properties(e) AS attributes

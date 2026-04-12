@@ -52,7 +52,6 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
             'group_id': edge.group_id,
             'episodes': episodes_str,
             'created_at': edge.created_at,
-            'expired_at': edge.expired_at,
             'valid_at': edge.valid_at,
             'invalid_at': edge.invalid_at,
         }
@@ -86,7 +85,6 @@ class Neo4jEntityEdgeOperations(EntityEdgeOperations):
                 'group_id': edge.group_id,
                 'episodes': episodes_str,
                 'created_at': edge.created_at,
-                'expired_at': edge.expired_at,
                 'valid_at': edge.valid_at,
                 'invalid_at': edge.invalid_at,
             }

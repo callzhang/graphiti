@@ -49,7 +49,6 @@ class KuzuEntityEdgeOperations(EntityEdgeOperations):
             'group_id': edge.group_id,
             'episodes': edge.episodes,
             'created_at': edge.created_at,
-            'expired_at': edge.expired_at,
             'valid_at': edge.valid_at,
             'invalid_at': edge.invalid_at,
             'attributes': json.dumps(edge.attributes or {}),

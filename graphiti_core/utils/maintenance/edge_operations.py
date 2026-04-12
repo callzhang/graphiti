@@ -552,10 +552,7 @@ async def resolve_extracted_edges(
                 )
 
         # Temporal contradiction resolution
-        now = utc_now()
-        if resolved_edge.invalid_at and not resolved_edge.expired_at:
-            resolved_edge.expired_at = now
-        if resolved_edge.expired_at is None:
+        if resolved_edge.invalid_at is None:
             invalidation_candidates.sort(
                 key=lambda c: (c.valid_at is None, ensure_utc(c.valid_at))
             )
@@ -568,7 +565,6 @@ async def resolve_extracted_edges(
                     and candidate_valid_at_utc > resolved_edge_valid_at_utc
                 ):
                     resolved_edge.invalid_at = candidate.valid_at
-                    resolved_edge.expired_at = now
                     break
 
         invalidated = resolve_edge_contradictions(resolved_edge, invalidation_candidates)
@@ -675,7 +671,6 @@ def resolve_edge_contradictions(
             and edge_valid_at_utc < resolved_edge_valid_at_utc
         ):
             edge.invalid_at = resolved_edge.valid_at
-            edge.expired_at = edge.expired_at if edge.expired_at is not None else utc_now()
             invalidated_edges.append(edge)
 
     return invalidated_edges
@@ -852,11 +847,8 @@ async def resolve_extracted_edge(
 
     now = utc_now()
 
-    if resolved_edge.invalid_at and not resolved_edge.expired_at:
-        resolved_edge.expired_at = now
-
-    # Determine if the new_edge needs to be expired
-    if resolved_edge.expired_at is None:
+    # Determine if the new edge needs to be invalidated
+    if resolved_edge.invalid_at is None:
         invalidation_candidates.sort(key=lambda c: (c.valid_at is None, ensure_utc(c.valid_at)))
         for candidate in invalidation_candidates:
             candidate_valid_at_utc = ensure_utc(candidate.valid_at)
@@ -866,9 +858,8 @@ async def resolve_extracted_edge(
                 and resolved_edge_valid_at_utc is not None
                 and candidate_valid_at_utc > resolved_edge_valid_at_utc
             ):
-                # Expire new edge since we have information about more recent events
+                # Invalidate new edge since we have information about more recent events
                 resolved_edge.invalid_at = candidate.valid_at
-                resolved_edge.expired_at = now
                 break
 
     # Determine which contradictory edges need to be expired

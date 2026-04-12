@@ -193,7 +193,6 @@ async def test_entity_edge(graph_driver, mock_embedder):
         name='likes',
         fact='Alice likes Bob',
         episodes=[],
-        expired_at=now,
         valid_at=now,
         invalid_at=now,
         group_id=group_id,

@@ -62,7 +62,6 @@ class SearchFilters(BaseModel):
     valid_at: list[list[DateFilter]] | None = Field(default=None)
     invalid_at: list[list[DateFilter]] | None = Field(default=None)
     created_at: list[list[DateFilter]] | None = Field(default=None)
-    expired_at: list[list[DateFilter]] | None = Field(default=None)
     edge_uuids: list[str] | None = Field(default=None)
     property_filters: list[PropertyFilter] | None = Field(default=None)
 
@@ -238,36 +237,5 @@ def edge_search_filter_query_constructor(
                 created_at_filter += ' OR '
 
         filter_queries.append(created_at_filter)
-
-    if filters.expired_at is not None:
-        expired_at_filter = '('
-        for i, or_list in enumerate(filters.expired_at):
-            for j, date_filter in enumerate(or_list):
-                if date_filter.comparison_operator not in [
-                    ComparisonOperator.is_null,
-                    ComparisonOperator.is_not_null,
-                ]:
-                    filter_params['expired_at_' + str(j)] = date_filter.date
-
-            and_filters = [
-                date_filter_query_constructor(
-                    'e.expired_at', f'$expired_at_{j}', date_filter.comparison_operator
-                )
-                for j, date_filter in enumerate(or_list)
-            ]
-            and_filter_query = ''
-            for j, and_filter in enumerate(and_filters):
-                and_filter_query += and_filter
-                if j != len(and_filters) - 1:
-                    and_filter_query += ' AND '
-
-            expired_at_filter += and_filter_query
-
-            if i == len(filters.expired_at) - 1:
-                expired_at_filter += ')'
-            else:
-                expired_at_filter += ' OR '
-
-        filter_queries.append(expired_at_filter)
 
     return filter_queries, filter_params

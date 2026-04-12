@@ -107,7 +107,6 @@ def get_fact_result_from_edge(edge: EntityEdge):
         valid_at=edge.valid_at,
         invalid_at=edge.invalid_at,
         created_at=edge.created_at,
-        expired_at=edge.expired_at,
     )
 
 

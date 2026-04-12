@@ -216,7 +216,7 @@ async def edge_fulltext_search(
     )
 
     # Exclude expired/invalidated edges from fulltext results
-    filter_queries.append('e.expired_at IS NULL')
+    filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -254,7 +254,6 @@ async def edge_fulltext_search(
                     e.name AS name,
                     e.fact AS fact,
                     CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
-                    e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
                     properties(e) AS attributes
@@ -337,7 +336,7 @@ async def edge_similarity_search(
 
     # Exclude expired/invalidated edges — temporal KG keeps them for history
     # but search should only return currently-valid facts.
-    filter_queries.append('e.expired_at IS NULL')
+    filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -403,7 +402,6 @@ async def edge_similarity_search(
                     r.name AS name,
                     r.fact AS fact,
                     CASE WHEN valueType(r.episodes) STARTS WITH 'LIST' THEN r.episodes WHEN r.episodes IS NULL OR r.episodes = '' THEN [] ELSE split(r.episodes, ',') END AS episodes,
-                    r.expired_at AS expired_at,
                     r.valid_at AS valid_at,
                     r.invalid_at AS invalid_at,
                     properties(r) AS attributes
@@ -423,7 +421,7 @@ async def edge_similarity_search(
             return []
     elif driver.provider == GraphProvider.NEO4J:
         # Native HNSW vector index search — O(log N) instead of O(N) cosine scan.
-        # Over-fetch to compensate for post-filtering by group_id/expired_at.
+        # Over-fetch to compensate for post-filtering by group_id/invalid_at.
         over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
         filter_parts = list(filter_queries)
@@ -516,7 +514,7 @@ async def entity_anchored_edge_search(
 
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
-    filter_parts = ['e.expired_at IS NULL']
+    filter_parts = ['e.invalid_at IS NULL']
     filter_params: dict[str, Any] = {}
     if group_ids is not None:
         filter_parts.append('entity.group_id IN $group_ids')
@@ -547,7 +545,6 @@ async def entity_anchored_edge_search(
             e.name AS name,
             e.fact AS fact,
             CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
-            e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
             properties(e) AS attributes,
@@ -590,7 +587,7 @@ async def multi_hop_edge_search(
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
     filter_params: dict[str, Any] = {}
-    where_parts = ['e.expired_at IS NULL']
+    where_parts = ['e.invalid_at IS NULL']
     if group_ids is not None:
         where_parts.append('hop.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -619,7 +616,6 @@ async def multi_hop_edge_search(
             e.name AS name,
             e.fact AS fact,
             CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
-            e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
             properties(e) AS attributes,
@@ -661,7 +657,7 @@ async def community_aware_edge_search(
     over_limit = limit * VECTOR_OVER_FETCH_RATIO
 
     filter_params: dict[str, Any] = {}
-    where_parts = ['e.expired_at IS NULL']
+    where_parts = ['e.invalid_at IS NULL']
     if group_ids is not None:
         where_parts.append('member.group_id IN $group_ids')
         filter_params['group_ids'] = group_ids
@@ -691,7 +687,6 @@ async def community_aware_edge_search(
             e.name AS name,
             e.fact AS fact,
             CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
-            e.expired_at AS expired_at,
             e.valid_at AS valid_at,
             e.invalid_at AS invalid_at,
             properties(e) AS attributes,
@@ -736,7 +731,7 @@ async def edge_bfs_search(
     )
 
     # Exclude expired/invalidated edges from BFS traversal
-    filter_queries.append('e.expired_at IS NULL')
+    filter_queries.append('e.invalid_at IS NULL')
 
     if group_ids is not None:
         filter_queries.append('e.group_id IN $group_ids')
@@ -806,7 +801,6 @@ async def edge_bfs_search(
                     e.name AS name,
                     e.fact AS fact,
                     CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
-                    e.expired_at AS expired_at,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
                     properties(e) AS attributes
@@ -1898,7 +1892,6 @@ async def get_relevant_edges(
                 fact: e.fact,
                 fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
                 episodes: CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END,
-                expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,
                 attributes: properties(e)
@@ -1952,8 +1945,7 @@ async def get_relevant_edges(
                         fact: e.fact,
                         fact_embedding: e.fact_embedding,
                         episodes: e.episodes,
-                        expired_at: e.expired_at,
-                        valid_at: e.valid_at,
+                                valid_at: e.valid_at,
                         invalid_at: e.invalid_at,
                         attributes: e.attributes
                     }) AS matches
@@ -1987,8 +1979,7 @@ async def get_relevant_edges(
                         fact: e.fact,
                         fact_embedding: e.fact_embedding,
                         episodes: e.episodes,
-                        expired_at: e.expired_at,
-                        valid_at: e.valid_at,
+                                valid_at: e.valid_at,
                         invalid_at: e.invalid_at,
                         attributes: properties(e)
                     })[..$limit] AS matches
@@ -2085,7 +2076,6 @@ async def get_edge_invalidation_candidates(
                 fact: e.fact,
                 fact_embedding: [x IN split(e.fact_embedding, ",") | toFloat(x)],
                 episodes: CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END,
-                expired_at: e.expired_at,
                 valid_at: e.valid_at,
                 invalid_at: e.invalid_at,
                 attributes: properties(e)
@@ -2139,8 +2129,7 @@ async def get_edge_invalidation_candidates(
                         fact: e.fact,
                         fact_embedding: e.fact_embedding,
                         episodes: e.episodes,
-                        expired_at: e.expired_at,
-                        valid_at: e.valid_at,
+                                valid_at: e.valid_at,
                         invalid_at: e.invalid_at,
                         attributes: e.attributes
                     }) AS matches
@@ -2175,8 +2164,7 @@ async def get_edge_invalidation_candidates(
                         fact: e.fact,
                         fact_embedding: e.fact_embedding,
                         episodes: e.episodes,
-                        expired_at: e.expired_at,
-                        valid_at: e.valid_at,
+                                valid_at: e.valid_at,
                         invalid_at: e.invalid_at,
                         attributes: properties(e)
                     })[..$limit] AS matches

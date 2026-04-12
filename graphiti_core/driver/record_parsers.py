@@ -62,7 +62,6 @@ def entity_edge_from_record(record: Any) -> EntityEdge:
     attributes.pop('group_id', None)
     attributes.pop('episodes', None)
     attributes.pop('created_at', None)
-    attributes.pop('expired_at', None)
     attributes.pop('valid_at', None)
     attributes.pop('invalid_at', None)
 
@@ -76,7 +75,6 @@ def entity_edge_from_record(record: Any) -> EntityEdge:
         group_id=record['group_id'],
         episodes=record['episodes'],
         created_at=parse_db_date(record['created_at']),  # type: ignore[arg-type]
-        expired_at=parse_db_date(record['expired_at']),
         valid_at=parse_db_date(record['valid_at']),
         invalid_at=parse_db_date(record['invalid_at']),
         attributes=attributes,

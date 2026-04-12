@@ -37,7 +37,7 @@ def get_range_indices(provider: GraphProvider) -> list[LiteralString]:
             # Saga node
             'CREATE INDEX FOR (n:Saga) ON (n.uuid, n.group_id, n.name)',
             # RELATES_TO edge
-            'CREATE INDEX FOR ()-[e:RELATES_TO]-() ON (e.uuid, e.group_id, e.name, e.created_at, e.expired_at, e.valid_at, e.invalid_at)',
+            'CREATE INDEX FOR ()-[e:RELATES_TO]-() ON (e.uuid, e.group_id, e.name, e.created_at, e.valid_at, e.invalid_at)',
             # MENTIONS edge
             'CREATE INDEX FOR ()-[e:MENTIONS]-() ON (e.uuid, e.group_id)',
             # HAS_MEMBER edge
@@ -76,7 +76,6 @@ def get_range_indices(provider: GraphProvider) -> list[LiteralString]:
         'CREATE INDEX valid_at_episodic_index IF NOT EXISTS FOR (n:Episodic) ON (n.valid_at)',
         'CREATE INDEX name_edge_index IF NOT EXISTS FOR ()-[e:RELATES_TO]-() ON (e.name)',
         'CREATE INDEX created_at_edge_index IF NOT EXISTS FOR ()-[e:RELATES_TO]-() ON (e.created_at)',
-        'CREATE INDEX expired_at_edge_index IF NOT EXISTS FOR ()-[e:RELATES_TO]-() ON (e.expired_at)',
         'CREATE INDEX valid_at_edge_index IF NOT EXISTS FOR ()-[e:RELATES_TO]-() ON (e.valid_at)',
         'CREATE INDEX invalid_at_edge_index IF NOT EXISTS FOR ()-[e:RELATES_TO]-() ON (e.invalid_at)',
     ]

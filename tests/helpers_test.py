@@ -293,7 +293,6 @@ async def assert_entity_edge_equals(
     assert sample.fact_embedding is not None
     assert np.allclose(retrieved.fact_embedding, sample.fact_embedding)
     assert retrieved.episodes == sample.episodes
-    assert retrieved.expired_at == sample.expired_at
     assert retrieved.valid_at == sample.valid_at
     assert retrieved.invalid_at == sample.invalid_at
     assert retrieved.attributes == sample.attributes

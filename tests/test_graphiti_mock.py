@@ -205,7 +205,6 @@ async def test_add_bulk(graph_driver, mock_llm_client, mock_embedder, mock_cross
         name='likes',
         fact='test_entity_1 relates to test_entity_2',
         episodes=[],
-        expired_at=now,
         valid_at=now,
         invalid_at=now,
         group_id=group_id,
@@ -219,7 +218,6 @@ async def test_add_bulk(graph_driver, mock_llm_client, mock_embedder, mock_cross
         name='relates_to',
         fact='test_entity_3 relates to test_entity_4',
         episodes=[],
-        expired_at=now,
         valid_at=now,
         invalid_at=now,
         group_id=group_id,
@@ -387,7 +385,6 @@ async def test_remove_episode(
         name='likes',
         fact='Alice likes Bob',
         episodes=[],
-        expired_at=now,
         valid_at=now,
         invalid_at=now,
         group_id=group_id,
@@ -945,7 +942,6 @@ async def test_edge_fulltext_search(
 
     now = datetime.now()
     created_at = now
-    expired_at = now + timedelta(days=6)
     valid_at = now + timedelta(days=2)
     invalid_at = now + timedelta(days=4)
 
@@ -958,7 +954,6 @@ async def test_edge_fulltext_search(
         created_at=created_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
-        expired_at=expired_at,
         group_id=group_id,
     )
     await entity_edge_1.generate_embedding(mock_embedder)
@@ -974,9 +969,6 @@ async def test_edge_fulltext_search(
         edge_types=['RELATES_TO'],
         created_at=[
             [DateFilter(date=created_at, comparison_operator=ComparisonOperator.equals)],
-        ],
-        expired_at=[
-            [DateFilter(date=now, comparison_operator=ComparisonOperator.not_equals)],
         ],
         valid_at=[
             [
@@ -1036,7 +1028,6 @@ async def test_edge_similarity_search(graph_driver, mock_embedder):
 
     now = datetime.now()
     created_at = now
-    expired_at = now + timedelta(days=6)
     valid_at = now + timedelta(days=2)
     invalid_at = now + timedelta(days=4)
 
@@ -1049,7 +1040,6 @@ async def test_edge_similarity_search(graph_driver, mock_embedder):
         created_at=created_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
-        expired_at=expired_at,
         group_id=group_id,
     )
     await entity_edge_1.generate_embedding(mock_embedder)
@@ -1065,9 +1055,6 @@ async def test_edge_similarity_search(graph_driver, mock_embedder):
         edge_types=['RELATES_TO'],
         created_at=[
             [DateFilter(date=created_at, comparison_operator=ComparisonOperator.equals)],
-        ],
-        expired_at=[
-            [DateFilter(date=now, comparison_operator=ComparisonOperator.not_equals)],
         ],
         valid_at=[
             [
@@ -1151,7 +1138,6 @@ async def test_edge_bfs_search(graph_driver, mock_embedder):
 
     now = datetime.now()
     created_at = now
-    expired_at = now + timedelta(days=6)
     valid_at = now + timedelta(days=2)
     invalid_at = now + timedelta(days=4)
 
@@ -1164,7 +1150,6 @@ async def test_edge_bfs_search(graph_driver, mock_embedder):
         created_at=created_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
-        expired_at=expired_at,
         group_id=group_id,
     )
     await entity_edge_1.generate_embedding(mock_embedder)
@@ -1176,7 +1161,6 @@ async def test_edge_bfs_search(graph_driver, mock_embedder):
         created_at=created_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
-        expired_at=expired_at,
         group_id=group_id,
     )
     await entity_edge_2.generate_embedding(mock_embedder)
@@ -1204,9 +1188,6 @@ async def test_edge_bfs_search(graph_driver, mock_embedder):
         edge_types=['RELATES_TO'],
         created_at=[
             [DateFilter(date=created_at, comparison_operator=ComparisonOperator.equals)],
-        ],
-        expired_at=[
-            [DateFilter(date=now, comparison_operator=ComparisonOperator.not_equals)],
         ],
         valid_at=[
             [
@@ -1789,7 +1770,6 @@ async def test_get_relevant_edges_and_invalidation_candidates(
 
     now = datetime.now()
     created_at = now
-    expired_at = now + timedelta(days=6)
     valid_at = now + timedelta(days=2)
     invalid_at = now + timedelta(days=4)
 
@@ -1800,7 +1780,6 @@ async def test_get_relevant_edges_and_invalidation_candidates(
         name='RELATES_TO',
         fact='Alice',
         created_at=created_at,
-        expired_at=expired_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
         group_id=group_id,
@@ -1812,7 +1791,6 @@ async def test_get_relevant_edges_and_invalidation_candidates(
         name='RELATES_TO',
         fact='Bob',
         created_at=created_at,
-        expired_at=expired_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
         group_id=group_id,
@@ -1824,7 +1802,6 @@ async def test_get_relevant_edges_and_invalidation_candidates(
         name='RELATES_TO',
         fact='Alice',
         created_at=created_at,
-        expired_at=expired_at,
         valid_at=valid_at,
         invalid_at=invalid_at,
         group_id=group_id,
@@ -1845,9 +1822,6 @@ async def test_get_relevant_edges_and_invalidation_candidates(
         edge_types=['RELATES_TO'],
         created_at=[
             [DateFilter(date=created_at, comparison_operator=ComparisonOperator.equals)],
-        ],
-        expired_at=[
-            [DateFilter(date=now, comparison_operator=ComparisonOperator.not_equals)],
         ],
         valid_at=[
             [

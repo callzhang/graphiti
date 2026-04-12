@@ -91,7 +91,6 @@ SCHEMA_QUERIES = """
         fact STRING,
         fact_embedding FLOAT[],
         episodes STRING[],
-        expired_at TIMESTAMP,
         valid_at TIMESTAMP,
         invalid_at TIMESTAMP,
         attributes STRING

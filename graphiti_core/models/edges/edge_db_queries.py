@@ -94,7 +94,6 @@ def get_entity_edge_save_query(provider: GraphProvider, has_aoss: bool = False) 
                     e.fact_embedding = $fact_embedding,
                     e.fact_embedding_model = $fact_embedding_model,
                     e.episodes = $episodes,
-                    e.expired_at = $expired_at,
                     e.valid_at = $valid_at,
                     e.invalid_at = $invalid_at,
                     e.reference_time = $reference_time,
@@ -160,7 +159,6 @@ def get_entity_edge_save_bulk_query(provider: GraphProvider, has_aoss: bool = Fa
                     e.fact_embedding = $fact_embedding,
                     e.fact_embedding_model = $fact_embedding_model,
                     e.episodes = $episodes,
-                    e.expired_at = $expired_at,
                     e.valid_at = $valid_at,
                     e.invalid_at = $invalid_at,
                     e.reference_time = $reference_time,
@@ -202,7 +200,6 @@ def get_entity_edge_return_query(provider: GraphProvider) -> str:
         e.fact_embedding_model AS fact_embedding_model,
         CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
         e.created_at AS created_at,
-        e.expired_at AS expired_at,
         e.valid_at AS valid_at,
         e.invalid_at AS invalid_at,
         properties(e) AS attributes
@@ -218,7 +215,6 @@ def get_entity_edge_return_query(provider: GraphProvider) -> str:
         e.fact AS fact,
         e.fact_embedding_model AS fact_embedding_model,
         e.episodes AS episodes,
-        e.expired_at AS expired_at,
         e.valid_at AS valid_at,
         e.invalid_at AS invalid_at,
     """ + (
