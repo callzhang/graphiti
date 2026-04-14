@@ -1,10 +1,11 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
+from graphiti_core.edges import EntityEdge
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search import edge_search, search
 from graphiti_core.search.search_config import (
@@ -258,6 +259,65 @@ async def test_search_emits_trace_spans_for_episode_mmr_signal(monkeypatch):
         ),
         search_filter=SearchFilters(),
     )
+
+
+@pytest.mark.asyncio
+async def test_edge_search_resolves_single_state_slots_before_limit(monkeypatch):
+    current_edge = EntityEdge(
+        uuid="edge-current",
+        group_id="g1",
+        source_node_uuid="atlas",
+        target_node_uuid="target-100",
+        fact="Atlas 当前目标是100万",
+        name="HAS_TARGET",
+        episodes=[],
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        valid_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        invalid_at=None,
+        attributes={"single_state": True},
+    )
+    future_edge = EntityEdge(
+        uuid="edge-future",
+        group_id="g1",
+        source_node_uuid="atlas",
+        target_node_uuid="target-120",
+        fact="Atlas 五月目标是120万",
+        name="HAS_TARGET",
+        episodes=[],
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        valid_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        invalid_at=None,
+        attributes={"single_state": True},
+    )
+
+    async def fake_edge_fulltext_search(*args, **kwargs):
+        return [future_edge, current_edge]
+
+    monkeypatch.setattr(
+        'graphiti_core.search.search.edge_fulltext_search',
+        fake_edge_fulltext_search,
+    )
+
+    tracer = RecordingTracer()
+    filters = SearchFilters()
+    filters.valid_at = [[SimpleNamespace(date=datetime(2026, 4, 10, tzinfo=timezone.utc))]]
+
+    edges, scores, details = await edge_search(
+        driver=SimpleNamespace(),
+        cross_encoder=SimpleNamespace(),
+        query='Project Atlas 的签约目标是多少？',
+        query_vector=[0.1, 0.2, 0.3],
+        group_ids=None,
+        config=EdgeSearchConfig(search_methods=[EdgeSearchMethod.bm25]),
+        search_filter=filters,
+        limit=1,
+        search_tracer=tracer,
+    )
+
+    assert [edge.uuid for edge in edges] == ["edge-current"]
+    assert len(scores) == 1
+    assert details["edge-current"]["single_state_resolution"]["bucket"] == "active"
+    assert details["edge-future"]["single_state_resolution"]["bucket"] == "suppressed"
 
     assert len(results.episodes) == 2
     span_names = [span.name for span in tracer.spans]

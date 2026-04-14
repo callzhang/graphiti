@@ -82,31 +82,146 @@ logger = logging.getLogger(__name__)
 RECENCY_HALF_LIFE_DAYS = 90.0
 
 
-def _recency_weight(ts: datetime | None, *, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> float:
-    """Return a multiplicative weight in (0, 1] that decays with age.
+def _resolve_query_reference_time(search_filter: SearchFilters | None) -> datetime | None:
+    if search_filter is None:
+        return None
 
-    Fresh items get weight ~1.0; items ``half_life_days`` old get ~0.5.
-    """
+    def _normalize(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    for groups in (getattr(search_filter, 'valid_at', None), getattr(search_filter, 'invalid_at', None)):
+        for or_list in groups or []:
+            for date_filter in or_list:
+                candidate = _normalize(getattr(date_filter, 'date', None))
+                if candidate is not None:
+                    return candidate
+    return None
+
+
+def _recency_weight(
+    ts: datetime | None,
+    *,
+    reference_time: datetime | None = None,
+    half_life_days: float = RECENCY_HALF_LIFE_DAYS,
+) -> float:
+    """Return a multiplicative weight in (0, 1] that decays with temporal distance."""
     if ts is None:
         return 0.5  # neutral when timestamp unknown
-    now = datetime.now(timezone.utc)
+    now = reference_time or datetime.now(timezone.utc)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    age_days = max(0.0, (now - ts).total_seconds() / 86_400)
+    age_days = abs((now - ts).total_seconds()) / 86_400
     return 1.0 / (1.0 + age_days / half_life_days)
+
+
+def _edge_is_single_state(edge: EntityEdge) -> bool:
+    return bool((getattr(edge, 'attributes', None) or {}).get('single_state'))
+
+
+def _edge_slot_key(edge: EntityEdge) -> tuple[str, str, str]:
+    return (
+        str(getattr(edge, 'group_id', '') or ''),
+        str(getattr(edge, 'source_node_uuid', '') or ''),
+        str(getattr(edge, 'name', '') or ''),
+    )
+
+
+def _edge_is_active_at(edge: EntityEdge, reference_time: datetime) -> bool:
+    valid_at = getattr(edge, 'valid_at', None)
+    invalid_at = getattr(edge, 'invalid_at', None)
+    if valid_at is not None:
+        if valid_at.tzinfo is None:
+            valid_at = valid_at.replace(tzinfo=timezone.utc)
+        if valid_at > reference_time:
+            return False
+    if invalid_at is not None:
+        if invalid_at.tzinfo is None:
+            invalid_at = invalid_at.replace(tzinfo=timezone.utc)
+        if invalid_at <= reference_time:
+            return False
+    return True
+
+
+def _resolve_single_state_edge_slots(
+    edges: list[EntityEdge],
+    scores: list[float],
+    *,
+    reference_time: datetime | None,
+    edge_score_details: dict[str, dict[str, Any]] | None = None,
+) -> tuple[list[EntityEdge], list[float]]:
+    if reference_time is None or not edges:
+        return edges, scores
+
+    chosen_by_slot: dict[tuple[str, str, str], int] = {}
+    grouped_indices: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    for index, edge in enumerate(edges):
+        if not _edge_is_single_state(edge):
+            continue
+        grouped_indices[_edge_slot_key(edge)].append(index)
+
+    for slot_key, indices in grouped_indices.items():
+        active_indices = [index for index in indices if _edge_is_active_at(edges[index], reference_time)]
+        chosen_indices = active_indices or indices
+        chosen_index = max(
+            chosen_indices,
+            key=lambda index: (
+                float(scores[index]),
+                getattr(edges[index], 'valid_at', None) or getattr(edges[index], 'created_at', None) or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+        )
+        chosen_by_slot[slot_key] = chosen_index
+        if edge_score_details is not None:
+            chosen_uuid = edges[chosen_index].uuid
+            edge_score_details.setdefault(chosen_uuid, {}).setdefault(
+                "single_state_resolution",
+                {
+                    "slot": list(slot_key),
+                    "reference_time": reference_time.isoformat(),
+                    "bucket": "active" if active_indices else "fallback",
+                    "candidate_count": len(indices),
+                    "chosen_uuid": chosen_uuid,
+                },
+            )
+
+    resolved_edges: list[EntityEdge] = []
+    resolved_scores: list[float] = []
+    for index, (edge, score) in enumerate(zip(edges, scores, strict=False)):
+        if _edge_is_single_state(edge):
+            slot_key = _edge_slot_key(edge)
+            chosen_index = chosen_by_slot.get(slot_key)
+            if chosen_index != index:
+                if edge_score_details is not None:
+                    edge_score_details.setdefault(edge.uuid, {})["single_state_resolution"] = {
+                        "slot": list(slot_key),
+                        "reference_time": reference_time.isoformat(),
+                        "bucket": "suppressed",
+                        "candidate_count": len(grouped_indices.get(slot_key, [])),
+                        "chosen_uuid": edges[chosen_index].uuid if chosen_index is not None else None,
+                    }
+                continue
+        resolved_edges.append(edge)
+        resolved_scores.append(score)
+
+    return resolved_edges, resolved_scores
 
 
 def _rerank_edges_with_recency(
     edges: list[EntityEdge],
     scores: list[float],
+    *,
+    reference_time: datetime | None = None,
 ) -> tuple[list[EntityEdge], list[float]]:
-    """Re-sort edges by ``score * recency_weight`` so recent facts rank higher."""
+    """Re-sort edges by query-time distance decay so closer facts rank higher."""
     if not edges:
         return edges, scores
     pairs = []
     for edge, score in zip(edges, scores):
         ts = getattr(edge, 'created_at', None) or getattr(edge, 'valid_at', None)
-        weighted = score * _recency_weight(ts)
+        weighted = score * _recency_weight(ts, reference_time=reference_time)
         pairs.append((weighted, edge))
     pairs.sort(key=lambda p: p[0], reverse=True)
     return [p[1] for p in pairs], [p[0] for p in pairs]
@@ -481,6 +596,7 @@ async def edge_search(
     if config is None:
         return [], [], {}
     search_tracer = _resolve_tracer(search_tracer)
+    query_reference_time = _resolve_query_reference_time(search_filter)
 
     with _trace_phase(
         search_tracer,
@@ -744,7 +860,25 @@ async def edge_search(
         )
 
         reranked_edges, edge_scores = _rerank_edges_with_recency(
-            reranked_edges[: 2 * limit], edge_scores[: 2 * limit]
+            reranked_edges[: 2 * limit],
+            edge_scores[: 2 * limit],
+            reference_time=query_reference_time,
+        )
+        pre_resolution_count = len(reranked_edges)
+        reranked_edges, edge_scores = _resolve_single_state_edge_slots(
+            reranked_edges,
+            edge_scores,
+            reference_time=query_reference_time,
+            edge_score_details=edge_score_details,
+        )
+        span.add_attributes(
+            {
+                'single_state.pre_resolution_count': pre_resolution_count,
+                'single_state.post_resolution_count': len(reranked_edges),
+                'single_state.reference_time': (
+                    query_reference_time.isoformat() if query_reference_time is not None else ''
+                ),
+            }
         )
         final_edges = reranked_edges[:limit]
         final_scores = edge_scores[:limit]
@@ -755,7 +889,10 @@ async def edge_search(
             )
             ts = getattr(edge, 'created_at', None) or getattr(edge, 'valid_at', None)
             detail["pre_recency_score"] = pre_recency_scores.get(edge.uuid)
-            detail["recency_weight"] = _recency_weight(ts)
+            detail["recency_weight"] = _recency_weight(ts, reference_time=query_reference_time)
+            detail["query_reference_time"] = (
+                query_reference_time.isoformat() if query_reference_time is not None else None
+            )
             detail["final_score"] = float(score)
             detail["final_rank"] = final_rank
         _attach_edge_score_formula_trees(edge_score_details)

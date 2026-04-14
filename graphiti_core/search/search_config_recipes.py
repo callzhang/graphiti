@@ -30,11 +30,14 @@ from graphiti_core.search.search_config import (
     SearchConfig,
 )
 
+RECALL_EDGE_SIM_MIN_SCORE = 0.45
+
 # Performs a hybrid search with rrf reranking over edges, nodes, and communities
 COMBINED_HYBRID_SEARCH_RRF = SearchConfig(
     edge_config=EdgeSearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.rrf,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     ),
     node_config=NodeSearchConfig(
         search_methods=[NodeSearchMethod.bm25, NodeSearchMethod.cosine_similarity],
@@ -59,6 +62,7 @@ COMBINED_HYBRID_SEARCH_MMR = SearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.mmr,
         mmr_lambda=1,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     ),
     node_config=NodeSearchConfig(
         search_methods=[NodeSearchMethod.bm25, NodeSearchMethod.cosine_similarity],
@@ -88,6 +92,7 @@ COMBINED_HYBRID_SEARCH_CROSS_ENCODER = SearchConfig(
             EdgeSearchMethod.bfs,
         ],
         reranker=EdgeReranker.cross_encoder,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     ),
     node_config=NodeSearchConfig(
         search_methods=[
@@ -115,6 +120,7 @@ EDGE_HYBRID_SEARCH_RRF = SearchConfig(
     edge_config=EdgeSearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.rrf,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     )
 )
 
@@ -123,6 +129,7 @@ EDGE_HYBRID_SEARCH_MMR = SearchConfig(
     edge_config=EdgeSearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.mmr,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     )
 )
 
@@ -131,6 +138,7 @@ EDGE_HYBRID_SEARCH_NODE_DISTANCE = SearchConfig(
     edge_config=EdgeSearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.node_distance,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     ),
 )
 
@@ -139,6 +147,7 @@ EDGE_HYBRID_SEARCH_EPISODE_MENTIONS = SearchConfig(
     edge_config=EdgeSearchConfig(
         search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
         reranker=EdgeReranker.episode_mentions,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     )
 )
 
@@ -151,6 +160,7 @@ EDGE_HYBRID_SEARCH_CROSS_ENCODER = SearchConfig(
             EdgeSearchMethod.bfs,
         ],
         reranker=EdgeReranker.cross_encoder,
+        sim_min_score=RECALL_EDGE_SIM_MIN_SCORE,
     ),
     limit=10,
 )
