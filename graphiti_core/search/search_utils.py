@@ -69,6 +69,23 @@ MAX_SEARCH_DEPTH = 3
 MAX_QUERY_LENGTH = 128
 
 
+def _attach_edge_method_scores(
+    edges: list[EntityEdge],
+    records: list[Any],
+    *,
+    method_name: str,
+    record_key: str,
+) -> list[EntityEdge]:
+    for edge, record in zip(edges, records, strict=False):
+        if record is None:
+            continue
+        raw_score = record.get(record_key) if hasattr(record, "get") else None
+        if raw_score is None:
+            continue
+        edge.attributes.setdefault("__search_method_scores", {})[method_name] = float(raw_score)
+    return edges
+
+
 def calculate_cosine_similarity(vector1: list[float], vector2: list[float]) -> float:
     """
     Calculates the cosine similarity between two vectors using NumPy.
@@ -259,7 +276,8 @@ async def edge_fulltext_search(
                     CASE WHEN valueType(e.episodes) STARTS WITH 'LIST' THEN e.episodes WHEN e.episodes IS NULL OR e.episodes = '' THEN [] ELSE split(e.episodes, ',') END AS episodes,
                     e.valid_at AS valid_at,
                     e.invalid_at AS invalid_at,
-                    properties(e) AS attributes
+                    properties(e) AS attributes,
+                    id.score AS search_score
                 ORDER BY score DESC LIMIT $limit
                             """
             )
@@ -284,6 +302,9 @@ async def edge_fulltext_search(
             RETURN
             """
             + get_entity_edge_return_query(driver.provider)
+            + """,
+            score AS search_score
+            """
             + """
             ORDER BY score DESC
             LIMIT $limit
@@ -300,7 +321,7 @@ async def edge_fulltext_search(
 
     edges = [get_entity_edge_from_record(record, driver.provider) for record in records]
 
-    return edges
+    return _attach_edge_method_scores(edges, records, method_name="bm25", record_key="search_score")
 
 
 async def edge_similarity_search(
@@ -408,7 +429,8 @@ async def edge_similarity_search(
                     CASE WHEN valueType(r.episodes) STARTS WITH 'LIST' THEN r.episodes WHEN r.episodes IS NULL OR r.episodes = '' THEN [] ELSE split(r.episodes, ',') END AS episodes,
                     r.valid_at AS valid_at,
                     r.invalid_at AS invalid_at,
-                    properties(r) AS attributes
+                    properties(r) AS attributes,
+                    i.score AS search_score
                 ORDER BY i.score DESC
                 LIMIT $limit
                     """
@@ -449,6 +471,7 @@ async def edge_similarity_search(
             AND score > $min_score
             RETURN
             {get_entity_edge_return_query(driver.provider)}
+            , score AS search_score
             ORDER BY score DESC
             LIMIT $limit
         """
@@ -474,6 +497,9 @@ async def edge_similarity_search(
             RETURN
             """
             + get_entity_edge_return_query(driver.provider)
+            + """,
+            score AS search_score
+            """
             + """
             ORDER BY score DESC
             LIMIT $limit
@@ -491,7 +517,9 @@ async def edge_similarity_search(
 
     edges = [get_entity_edge_from_record(record, driver.provider) for record in records]
 
-    return edges
+    return _attach_edge_method_scores(
+        edges, records, method_name="cosine_similarity", record_key="search_score"
+    )
 
 
 async def entity_anchored_edge_search(
@@ -570,7 +598,10 @@ async def entity_anchored_edge_search(
         routing_='r',
         **filter_params,
     )
-    return [get_entity_edge_from_record(record, driver.provider) for record in records]
+    edges = [get_entity_edge_from_record(record, driver.provider) for record in records]
+    return _attach_edge_method_scores(
+        edges, records, method_name="entity_anchored", record_key="entity_score"
+    )
 
 
 async def multi_hop_edge_search(
