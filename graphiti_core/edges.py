@@ -42,8 +42,35 @@ from graphiti_core.models.edges.edge_db_queries import (
     get_entity_edge_save_query,
 )
 from graphiti_core.nodes import Node
+from graphiti_core.utils.datetime_utils import convert_datetimes_to_strings
 
 logger = logging.getLogger(__name__)
+
+
+def _is_neo4j_property_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _coerce_neo4j_property_value(value: Any) -> Any | None:
+    value = convert_datetimes_to_strings(value)
+    if _is_neo4j_property_scalar(value):
+        return value
+    if isinstance(value, (list, tuple)):
+        coerced_items = [_coerce_neo4j_property_value(item) for item in value]
+        if all(_is_neo4j_property_scalar(item) for item in coerced_items):
+            return list(coerced_items)
+    return None
+
+
+def prepare_edge_attributes_for_storage(attributes: dict[str, Any] | None) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in (attributes or {}).items():
+        if str(key).startswith("__"):
+            continue
+        coerced = _coerce_neo4j_property_value(value)
+        if coerced is not None or value is None:
+            sanitized[key] = coerced
+    return sanitized
 
 
 class Edge(BaseModel, ABC):
@@ -284,6 +311,9 @@ class EntityEdge(Edge):
         default={}, description='Additional attributes of the edge. Dependent on edge name'
     )
 
+    def serializable_attributes(self) -> dict[str, Any]:
+        return prepare_edge_attributes_for_storage(self.attributes)
+
     async def generate_embedding(self, embedder: EmbedderClient):
         start = time()
 
@@ -357,13 +387,13 @@ class EntityEdge(Edge):
         }
 
         if driver.provider == GraphProvider.KUZU:
-            edge_data['attributes'] = json.dumps(self.attributes)
+            edge_data['attributes'] = json.dumps(self.serializable_attributes())
             result = await driver.execute_query(
                 get_entity_edge_save_query(driver.provider),
                 **edge_data,
             )
         else:
-            edge_data.update(self.attributes or {})
+            edge_data.update(self.serializable_attributes())
             result = await driver.execute_query(
                 get_entity_edge_save_query(driver.provider),
                 edge_data=edge_data,
