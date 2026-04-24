@@ -59,6 +59,39 @@ from graphiti_core.helpers import semaphore_gather
 logger = logging.getLogger(__name__)
 
 
+def _compact_query_summary(query: str, *, limit: int = 240) -> str:
+    compact = " ".join(query.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
+
+
+def classify_neo4j_error(exc: BaseException) -> dict[str, str | None]:
+    message = str(exc)
+    lowered = message.lower()
+    error_class = "neo4j_error"
+    if "defunct connection" in lowered:
+        error_class = "neo4j_connection_defunct"
+    elif "transaction closed" in lowered:
+        error_class = "neo4j_transaction_closed"
+    elif "incompletecommit" in lowered or "incomplete commit" in lowered:
+        error_class = "neo4j_incomplete_commit"
+    elif "entitynotfound" in lowered or "entity not found" in lowered:
+        error_class = "neo4j_entity_not_found"
+    elif "sessionexpired" in lowered or "session expired" in lowered:
+        error_class = "neo4j_session_expired"
+    elif "serviceunavailable" in lowered or "service unavailable" in lowered:
+        error_class = "neo4j_service_unavailable"
+    elif "parametermissing" in lowered or "expected parameter" in lowered:
+        error_class = "neo4j_parameter_missing"
+    return {
+        "error_class": error_class,
+        "neo4j_code": getattr(exc, "code", None) or getattr(exc, "neo4j_code", None),
+        "gql_status": getattr(exc, "gql_status", None),
+        "message": message,
+    }
+
+
 class Neo4jDriver(GraphDriver):
     provider = GraphProvider.NEO4J
     default_group_id: str = ''
@@ -69,11 +102,35 @@ class Neo4jDriver(GraphDriver):
         user: str | None,
         password: str | None,
         database: str = 'neo4j',
+        *,
+        keep_alive: bool = True,
+        liveness_check_timeout: float | None = None,
+        max_connection_lifetime: float | None = None,
+        connection_timeout: float | None = None,
+        connection_acquisition_timeout: float | None = None,
+        max_transaction_retry_time: float | None = None,
+        max_connection_pool_size: int | None = None,
     ):
         super().__init__()
+        driver_kwargs: dict[str, Any] = {
+            "uri": uri,
+            "auth": (user or '', password or ''),
+            "keep_alive": keep_alive,
+        }
+        if liveness_check_timeout is not None:
+            driver_kwargs["liveness_check_timeout"] = liveness_check_timeout
+        if max_connection_lifetime is not None:
+            driver_kwargs["max_connection_lifetime"] = max_connection_lifetime
+        if connection_timeout is not None:
+            driver_kwargs["connection_timeout"] = connection_timeout
+        if connection_acquisition_timeout is not None:
+            driver_kwargs["connection_acquisition_timeout"] = connection_acquisition_timeout
+        if max_transaction_retry_time is not None:
+            driver_kwargs["max_transaction_retry_time"] = max_transaction_retry_time
+        if max_connection_pool_size is not None:
+            driver_kwargs["max_connection_pool_size"] = max_connection_pool_size
         self.client = AsyncGraphDatabase.driver(
-            uri=uri,
-            auth=(user or '', password or ''),
+            **driver_kwargs,
         )
         self._database = database
         self._close_lock = asyncio.Lock()
@@ -176,10 +233,28 @@ class Neo4jDriver(GraphDriver):
         except ClientError as exc:
             if 'EquivalentSchemaRuleAlreadyExists' in str(exc):
                 raise
-            logger.error('Error executing Neo4j query: %s\n%s\n%s', exc, cypher_query_, params)
+            details = classify_neo4j_error(exc)
+            logger.error(
+                'Error executing Neo4j query: class=%s neo4j_code=%s gql_status=%s query=%s params=%s error=%s',
+                details["error_class"],
+                details["neo4j_code"],
+                details["gql_status"],
+                _compact_query_summary(cypher_query_),
+                params,
+                details["message"],
+            )
             raise
         except Exception as exc:
-            logger.error('Error executing Neo4j query: %s\n%s\n%s', exc, cypher_query_, params)
+            details = classify_neo4j_error(exc)
+            logger.error(
+                'Error executing Neo4j query: class=%s neo4j_code=%s gql_status=%s query=%s params=%s error=%s',
+                details["error_class"],
+                details["neo4j_code"],
+                details["gql_status"],
+                _compact_query_summary(cypher_query_),
+                params,
+                details["message"],
+            )
             raise
 
         return result
