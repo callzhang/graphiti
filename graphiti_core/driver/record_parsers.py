@@ -16,7 +16,7 @@ limitations under the License.
 
 from typing import Any
 
-from graphiti_core.edges import EntityEdge
+from graphiti_core.edges import EntityEdge, normalize_entity_edge_episodes
 from graphiti_core.helpers import parse_db_date
 from graphiti_core.nodes import CommunityNode, EntityNode, EpisodeType, EpisodicNode
 
@@ -73,7 +73,7 @@ def entity_edge_from_record(record: Any) -> EntityEdge:
         fact_embedding=record.get('fact_embedding'),
         name=record['name'],
         group_id=record['group_id'],
-        episodes=record['episodes'],
+        episodes=normalize_entity_edge_episodes(record.get('episodes')),
         created_at=parse_db_date(record['created_at']),  # type: ignore[arg-type]
         valid_at=parse_db_date(record['valid_at']),
         invalid_at=parse_db_date(record['invalid_at']),

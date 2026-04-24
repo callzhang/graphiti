@@ -994,8 +994,21 @@ def get_episodic_edge_from_record(record: Any) -> EpisodicEdge:
     )
 
 
+def normalize_entity_edge_episodes(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        return [part.strip() for part in raw.split(',') if part.strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
 def get_entity_edge_from_record(record: Any, provider: GraphProvider) -> EntityEdge:
-    episodes = record['episodes']
+    episodes = normalize_entity_edge_episodes(record.get('episodes'))
     fact_embedding_model = record.get('fact_embedding_model')
     if provider == GraphProvider.KUZU:
         attributes = json.loads(record['attributes']) if record['attributes'] else {}
