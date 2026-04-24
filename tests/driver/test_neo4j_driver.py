@@ -118,3 +118,57 @@ async def test_build_indices_only_creates_missing_indexes(monkeypatch: pytest.Mo
         """CREATE FULLTEXT INDEX node_name_and_summary IF NOT EXISTS
             FOR (n:Entity) ON EACH [n.name]""",
     ]
+
+
+def test_report_event_sends_structured_payload_to_observer(monkeypatch: pytest.MonkeyPatch):
+    observed: list[dict[str, object]] = []
+    client = type("MockClient", (), {})()
+
+    monkeypatch.setattr(module.AsyncGraphDatabase, "driver", lambda *args, **kwargs: client)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    driver = module.Neo4jDriver(
+        "bolt://localhost:7687",
+        "neo4j",
+        "secret",
+        event_observer=observed.append,
+    )
+
+    driver._report_event(
+        "query_error",
+        {"error_class": "neo4j_connection_defunct", "message": "defunct connection"},
+        query_name="demo",
+    )
+
+    assert observed[0]["kind"] == "query_error"
+    assert observed[0]["error_class"] == "neo4j_connection_defunct"
+    assert observed[0]["query_name"] == "demo"
+    assert observed[0]["observed_at"]
+
+
+@pytest.mark.asyncio
+async def test_execute_query_reports_success_and_failure_events(monkeypatch: pytest.MonkeyPatch):
+    observed: list[dict[str, object]] = []
+    client = type("MockClient", (), {})()
+    client.execute_query = AsyncMock(
+        side_effect=[SimpleNamespace(records=[]), RuntimeError("defunct connection")]
+    )
+
+    monkeypatch.setattr(module.AsyncGraphDatabase, "driver", lambda *args, **kwargs: client)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    driver = module.Neo4jDriver(
+        "bolt://localhost:7687",
+        "neo4j",
+        "secret",
+        event_observer=observed.append,
+    )
+
+    await driver.execute_query("MATCH (n) RETURN n", query_name="read_nodes")
+    with pytest.raises(RuntimeError, match="defunct connection"):
+        await driver.execute_query("MATCH (n) RETURN n", query_name="read_nodes")
+
+    assert observed[0]["kind"] == "query_ok"
+    assert observed[0]["query_name"] == "read_nodes"
+    assert observed[1]["kind"] == "query_error"
+    assert observed[1]["error_class"] == "neo4j_connection_defunct"

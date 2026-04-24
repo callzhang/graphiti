@@ -19,6 +19,7 @@ import logging
 import re
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from neo4j import AsyncGraphDatabase, EagerResult
@@ -92,6 +93,10 @@ def classify_neo4j_error(exc: BaseException) -> dict[str, str | None]:
     }
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class Neo4jDriver(GraphDriver):
     provider = GraphProvider.NEO4J
     default_group_id: str = ''
@@ -110,6 +115,7 @@ class Neo4jDriver(GraphDriver):
         connection_acquisition_timeout: float | None = None,
         max_transaction_retry_time: float | None = None,
         max_connection_pool_size: int | None = None,
+        event_observer: Any | None = None,
     ):
         super().__init__()
         driver_kwargs: dict[str, Any] = {
@@ -136,6 +142,7 @@ class Neo4jDriver(GraphDriver):
         self._close_lock = asyncio.Lock()
         self._closed = False
         self._index_init_task: asyncio.Task[Any] | None = None
+        self._event_observer = event_observer
 
         # Instantiate Neo4j operations
         self._entity_node_ops = Neo4jEntityNodeOperations()
@@ -161,6 +168,15 @@ class Neo4jDriver(GraphDriver):
             pass
 
         self.aoss_client = None
+
+    def _report_event(self, kind: str, payload: dict[str, Any] | None = None, **extra: Any) -> None:
+        if self._event_observer is None:
+            return
+        event = dict(payload or {})
+        event["kind"] = kind
+        event["observed_at"] = str(event.get("observed_at") or _utc_now_iso())
+        event.update(extra)
+        self._event_observer(event)
 
     # --- Operations properties ---
 
@@ -223,10 +239,12 @@ class Neo4jDriver(GraphDriver):
     async def execute_query(self, cypher_query_: LiteralString, **kwargs: Any) -> EagerResult:
         # Check if database_ is provided in kwargs.
         # If not populated, set the value to retain backwards compatibility
+        query_name = kwargs.pop('query_name', None)
         params = kwargs.pop('params', None)
         if params is None:
             params = {}
         params.setdefault('database_', self._database)
+        query_summary = _compact_query_summary(cypher_query_)
 
         try:
             result = await self.client.execute_query(cypher_query_, parameters_=params, **kwargs)
@@ -234,29 +252,42 @@ class Neo4jDriver(GraphDriver):
             if 'EquivalentSchemaRuleAlreadyExists' in str(exc):
                 raise
             details = classify_neo4j_error(exc)
+            self._report_event(
+                'query_error',
+                details,
+                query_name=query_name,
+                query_summary=query_summary,
+            )
             logger.error(
                 'Error executing Neo4j query: class=%s neo4j_code=%s gql_status=%s query=%s params=%s error=%s',
                 details["error_class"],
                 details["neo4j_code"],
                 details["gql_status"],
-                _compact_query_summary(cypher_query_),
+                query_summary,
                 params,
                 details["message"],
             )
             raise
         except Exception as exc:
             details = classify_neo4j_error(exc)
+            self._report_event(
+                'query_error',
+                details,
+                query_name=query_name,
+                query_summary=query_summary,
+            )
             logger.error(
                 'Error executing Neo4j query: class=%s neo4j_code=%s gql_status=%s query=%s params=%s error=%s',
                 details["error_class"],
                 details["neo4j_code"],
                 details["gql_status"],
-                _compact_query_summary(cypher_query_),
+                query_summary,
                 params,
                 details["message"],
             )
             raise
 
+        self._report_event('query_ok', query_name=query_name, query_summary=query_summary)
         return result
 
     def session(self, database: str | None = None) -> GraphDriverSession:
@@ -354,8 +385,14 @@ class Neo4jDriver(GraphDriver):
         """Check Neo4j connectivity by running the driver's verify_connectivity method."""
         try:
             await self.client.verify_connectivity()
+            self._report_event('health_check_ok', query_name='verify_connectivity')
             return None
         except Exception as e:
+            self._report_event(
+                'health_check_error',
+                classify_neo4j_error(e),
+                query_name='verify_connectivity',
+            )
             print(f'Neo4j health check failed: {e}')
             raise
 
