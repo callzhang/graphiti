@@ -81,7 +81,7 @@ def get_range_indices(provider: GraphProvider) -> list[LiteralString]:
     ]
 
 
-def get_fulltext_indices(provider: GraphProvider) -> list[LiteralString]:
+def get_fulltext_indices(provider: GraphProvider, analyzer: str | None = None) -> list[LiteralString]:
     if provider == GraphProvider.FALKORDB:
         from typing import cast
 
@@ -127,6 +127,19 @@ def get_fulltext_indices(provider: GraphProvider) -> list[LiteralString]:
             "CALL CREATE_FTS_INDEX('RelatesToNode_', 'edge_name_and_fact', ['name', 'fact']);",
         ]
 
+    if analyzer:
+        from typing import cast as _cast
+        options = f' OPTIONS {{indexConfig: {{`fulltext.analyzer`: "{analyzer}"}}}}'
+        return _cast(list[LiteralString], [
+            f'CREATE FULLTEXT INDEX episode_content IF NOT EXISTS'
+            f' FOR (e:Episodic) ON EACH [e.content, e.source, e.source_description, e.group_id]{options}',
+            f'CREATE FULLTEXT INDEX node_name_and_summary IF NOT EXISTS'
+            f' FOR (n:Entity) ON EACH [n.name, n.summary, n.group_id]{options}',
+            f'CREATE FULLTEXT INDEX community_name IF NOT EXISTS'
+            f' FOR (n:Community) ON EACH [n.name, n.group_id]{options}',
+            f'CREATE FULLTEXT INDEX edge_name_and_fact IF NOT EXISTS'
+            f' FOR ()-[e:RELATES_TO]-() ON EACH [e.name, e.fact, e.group_id]{options}',
+        ])
     return [
         """CREATE FULLTEXT INDEX episode_content IF NOT EXISTS
         FOR (e:Episodic) ON EACH [e.content, e.source, e.source_description, e.group_id]""",
