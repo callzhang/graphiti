@@ -1057,6 +1057,8 @@ def get_episodic_node_from_record(record: Any) -> EpisodicNode:
         name=record['name'],
         source_description=record['source_description'],
         entity_edges=record['entity_edges'],
+        content_embedding=record.get('content_embedding'),
+        content_embedding_model=record.get('content_embedding_model'),
     )
 
 
